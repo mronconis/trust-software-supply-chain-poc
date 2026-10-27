@@ -1,0 +1,132 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: trusted-supply-chain
+  labels:
+    app.kubernetes.io/part-of: trust-software-supply-chain
+spec:
+  description: >
+    Full trusted supply chain: git clone → build → push to Quay.io →
+    SBOM → GUAC ingest → security gate → cosign sign & verify.
+  params:
+    - name: IMAGE
+      type: string
+      default: "quay.io/mronconi/trusted-supply-chain-app:latest"
+    - name: GIT_URL
+      type: string
+      default: "https://github.com/mronconis/trust-supply-chain-poc.git"
+    - name: GIT_REVISION
+      type: string
+      default: "main"
+    - name: APP_CONTEXT
+      type: string
+      default: "quarkus-app"
+    - name: ROX_CENTRAL_ADDRESS
+      type: string
+      default: "central.stackrox.svc:443"
+      description: "StackRox/ACS Central endpoint (host:port). Defaults to local StackRox on kind."
+  workspaces:
+    - name: shared-workspace
+    - name: cosign-keys
+    - name: dockerconfig
+    - name: roxctl-secret
+
+  tasks:
+    # ═══════════════════════════════════════════════════════════
+    # Stage 1 — Git clone + Build + Push to Quay.io
+    # ═══════════════════════════════════════════════════════════
+    - name: build-and-push
+      taskRef:
+        name: build-and-push
+      params:
+        - name: IMAGE
+          value: $(params.IMAGE)
+        - name: GIT_URL
+          value: $(params.GIT_URL)
+        - name: GIT_REVISION
+          value: $(params.GIT_REVISION)
+        - name: APP_CONTEXT
+          value: $(params.APP_CONTEXT)
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+        - name: dockerconfig
+          workspace: dockerconfig
+
+    # ═══════════════════════════════════════════════════════════
+    # Stage 2 — Generate SBOM
+    # ═══════════════════════════════════════════════════════════
+    - name: generate-sbom
+      runAfter: [build-and-push]
+      taskRef:
+        name: generate-sbom
+      params:
+        - name: IMAGE
+          value: $(params.IMAGE)
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+        - name: dockerconfig
+          workspace: dockerconfig
+
+    # ═══════════════════════════════════════════════════════════
+    # Stage 3 — StackRox scan + GUAC ingest + build-time policy gate
+    # ═══════════════════════════════════════════════════════════
+    - name: security-gate
+      runAfter: [generate-sbom]
+      taskRef:
+        name: security-gate
+      params:
+        - name: IMAGE
+          value: $(params.IMAGE)
+        - name: ROX_CENTRAL_ADDRESS
+          value: $(params.ROX_CENTRAL_ADDRESS)
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+        - name: dockerconfig
+          workspace: dockerconfig
+        - name: roxctl-secret
+          workspace: roxctl-secret
+
+    # ═══════════════════════════════════════════════════════════
+    # Stage 4 — Attest SBOM + Sign + Verify (only if gate passed)
+    # ═══════════════════════════════════════════════════════════
+    - name: sign-and-attest
+      runAfter: [security-gate]
+      taskRef:
+        name: sign-and-attest
+      params:
+        - name: IMAGE
+          value: $(params.IMAGE)
+        - name: IMAGE_DIGEST
+          value: $(tasks.build-and-push.results.IMAGE_DIGEST)
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+        - name: cosign-keys
+          workspace: cosign-keys
+        - name: dockerconfig
+          workspace: dockerconfig
+
+  finally:
+    - name: pipeline-summary
+      taskSpec:
+        steps:
+          - name: summary
+            image: alpine:3.20
+            script: |
+              #!/bin/sh
+              cat <<EOF
+
+              ╔═══════════════════════════════════════════════════════════╗
+              ║   TRUSTED SUPPLY CHAIN — PIPELINE COMPLETE              ║
+              ╠═══════════════════════════════════════════════════════════╣
+              ║   Image : $(params.IMAGE)
+              ║   Source: $(params.GIT_URL) @ $(params.GIT_REVISION)
+              ║   Gate  : StackRox/ACS build-time policies
+              ║                                                         ║
+              ║   If any task failed, the image was NOT signed.         ║
+              ║   Run: cosign verify --key cosign.pub $(params.IMAGE)   ║
+              ╚═══════════════════════════════════════════════════════════╝
+              EOF

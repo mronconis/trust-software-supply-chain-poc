@@ -1,0 +1,62 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: guac-visualizer
+  labels:
+    app: guac-visualizer
+    app.kubernetes.io/part-of: trusted-software-supply-chain
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: guac-visualizer
+  template:
+    metadata:
+      labels:
+        app: guac-visualizer
+    spec:
+      securityContext:
+        runAsUser: 0
+      containers:
+        - name: visualizer
+          image: ghcr.io/guacsec/guac-visualizer:v0.6.4
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              sed -i "s|http://localhost:8080|${NEXT_PUBLIC_GUACGQL_SERVER_URL}|g" \
+                /workspace/.next/routes-manifest.json \
+                /workspace/.next/required-server-files.json
+              exec /layers/paketo-buildpacks_node-engine/node/bin/node \
+                /layers/paketo-buildpacks_yarn-install/launch-modules/node_modules/.bin/next start
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: NEXT_PUBLIC_GUACGQL_SERVER_URL
+              value: "http://guac-graphql:8080"
+            - name: NODE_PATH
+              value: "/layers/paketo-buildpacks_yarn-install/launch-modules/node_modules"
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "250m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: guac-visualizer
+  labels:
+    app: guac-visualizer
+spec:
+  selector:
+    app: guac-visualizer
+  ports:
+    - port: 3000
+      targetPort: 3000
+      nodePort: 30080
+      name: http
+  type: NodePort

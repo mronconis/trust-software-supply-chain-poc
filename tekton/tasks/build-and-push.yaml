@@ -1,0 +1,87 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: build-and-push
+  labels:
+    app.kubernetes.io/part-of: trusted-software-supply-chain
+spec:
+  description: >
+    Clones source from Git and builds/pushes a container image
+    to Quay.io using Buildah (daemonless, OCI format).
+  params:
+    - name: IMAGE
+      type: string
+    - name: GIT_URL
+      type: string
+    - name: GIT_REVISION
+      type: string
+    - name: APP_CONTEXT
+      type: string
+  workspaces:
+    - name: source
+    - name: dockerconfig
+  results:
+    - name: IMAGE_DIGEST
+    - name: IMAGE_URL
+    - name: COMMIT_SHA
+  steps:
+    - name: git-clone
+      image: alpine/git:2.47.2
+      script: |
+        #!/bin/sh
+        set -eu
+        echo "╔═══════════════════════════════════════════════════════════╗"
+        echo "║  GIT CLONE                                               ║"
+        echo "╠═══════════════════════════════════════════════════════════╣"
+        echo "║  URL : $(params.GIT_URL)"
+        echo "║  Rev : $(params.GIT_REVISION)"
+        echo "╚═══════════════════════════════════════════════════════════╝"
+        cd $(workspaces.source.path)
+        rm -rf source && mkdir source && cd source
+        git init
+        git remote add origin "$(params.GIT_URL)"
+        git fetch --depth 1 origin "$(params.GIT_REVISION)"
+        git checkout FETCH_HEAD
+        SHA=$(git rev-parse --short HEAD)
+        echo "▸ Cloned at commit ${SHA}"
+        printf "%s" "${SHA}" > $(results.COMMIT_SHA.path)
+
+    - name: buildah-build-push
+      image: quay.io/buildah/stable:v1.38
+      securityContext:
+        privileged: true
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+        IMAGE="$(params.IMAGE)"
+        AUTHFILE="$(workspaces.dockerconfig.path)/.dockerconfigjson"
+        CONTEXT_DIR="$(workspaces.source.path)/source/$(params.APP_CONTEXT)"
+
+        echo "╔═══════════════════════════════════════════════════════════╗"
+        echo "║  BUILDAH BUILD & PUSH                                    ║"
+        echo "╠═══════════════════════════════════════════════════════════╣"
+        echo "║  Image   : ${IMAGE}"
+        echo "║  Context : ${CONTEXT_DIR}"
+        echo "╚═══════════════════════════════════════════════════════════╝"
+
+        cd "${CONTEXT_DIR}"
+
+        buildah bud \
+          --format oci \
+          --tls-verify=true \
+          --layers \
+          -f Dockerfile \
+          -t "${IMAGE}" .
+
+        echo "▸ Pushing to registry..."
+        buildah push \
+          --tls-verify=true \
+          --authfile "${AUTHFILE}" \
+          --digestfile /tmp/image-digest \
+          "${IMAGE}" \
+          "docker://${IMAGE}"
+
+        DIGEST=$(cat /tmp/image-digest)
+        echo "✅ Pushed ${IMAGE}@${DIGEST}"
+        printf "%s" "${DIGEST}"              > $(results.IMAGE_DIGEST.path)
+        printf "%s@%s" "${IMAGE}" "${DIGEST}" > $(results.IMAGE_URL.path)

@@ -1,0 +1,92 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: sign-and-attest
+  labels:
+    app.kubernetes.io/part-of: trusted-software-supply-chain
+spec:
+  description: >
+    Attests the SBOM, signs the container image with Cosign
+    (static keypair), and verifies the signature.
+  params:
+    - name: IMAGE
+      type: string
+    - name: IMAGE_DIGEST
+      type: string
+  workspaces:
+    - name: source
+    - name: cosign-keys
+    - name: dockerconfig
+  results:
+    - name: SIGNED_IMAGE
+  steps:
+    - name: cosign-attest-sbom
+      image: bitnami/cosign:latest
+      env:
+        - name: COSIGN_PASSWORD
+          value: ""
+        - name: DOCKER_CONFIG
+          value: /tmp/docker-auth
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+        IMAGE="$(params.IMAGE)@$(params.IMAGE_DIGEST)"
+
+        mkdir -p "${DOCKER_CONFIG}"
+        cp "$(workspaces.dockerconfig.path)/.dockerconfigjson" "${DOCKER_CONFIG}/config.json" 2>/dev/null || true
+
+        echo "▸ Attesting SBOM to ${IMAGE}"
+        cosign attest \
+          --key "$(workspaces.cosign-keys.path)/cosign.key" \
+          --type cyclonedx \
+          --predicate "$(workspaces.source.path)/sbom-cyclonedx.json" \
+          --yes \
+          "${IMAGE}"
+        echo "✅ SBOM attestation attached"
+
+    - name: cosign-sign
+      image: bitnami/cosign:latest
+      env:
+        - name: COSIGN_PASSWORD
+          value: ""
+        - name: DOCKER_CONFIG
+          value: /tmp/docker-auth
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+        IMAGE="$(params.IMAGE)@$(params.IMAGE_DIGEST)"
+
+        mkdir -p "${DOCKER_CONFIG}"
+        cp "$(workspaces.dockerconfig.path)/.dockerconfigjson" "${DOCKER_CONFIG}/config.json" 2>/dev/null || true
+
+        echo "╔═══════════════════════════════════════════════════════════╗"
+        echo "║  COSIGN SIGN                                             ║"
+        echo "╠═══════════════════════════════════════════════════════════╣"
+        echo "║  Image : ${IMAGE}"
+        echo "╚═══════════════════════════════════════════════════════════╝"
+        cosign sign \
+          --key "$(workspaces.cosign-keys.path)/cosign.key" \
+          --yes \
+          "${IMAGE}"
+        echo "✅ Image signed successfully"
+        printf "%s" "${IMAGE}" > $(results.SIGNED_IMAGE.path)
+
+    - name: cosign-verify
+      image: bitnami/cosign:latest
+      env:
+        - name: DOCKER_CONFIG
+          value: /tmp/docker-auth
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+
+        mkdir -p "${DOCKER_CONFIG}"
+        cp "$(workspaces.dockerconfig.path)/.dockerconfigjson" "${DOCKER_CONFIG}/config.json" 2>/dev/null || true
+
+        echo "▸ Verifying signature with public key..."
+        cosign verify \
+          --key "$(workspaces.cosign-keys.path)/cosign.pub" \
+          --insecure-ignore-tlog \
+          "$(params.IMAGE)"
+        echo ""
+        echo "✅ Signature verified — the chain of trust is intact"

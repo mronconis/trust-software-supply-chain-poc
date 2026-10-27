@@ -1,0 +1,136 @@
+---
+# GUAC (Graph for Understanding Artifact Composition)
+# Upstream of Red Hat Trusted Profile Analyzer (TPA)
+#
+# This deploys an all-in-one GUAC instance with:
+# - GraphQL API server
+# - In-memory backend (ent for demo)
+# - Ingest endpoint for SBOMs and vulnerability data
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: guac-config
+data:
+  guac.yaml: |
+    log-level: info
+    enable-prometheus: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: guac-graphql
+  labels:
+    app: guac-graphql
+    app.kubernetes.io/part-of: trusted-software-supply-chain
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: guac-graphql
+  template:
+    metadata:
+      labels:
+        app: guac-graphql
+    spec:
+      containers:
+        - name: guac
+          image: ghcr.io/guacsec/guac:v0.10.0
+          command: ["/opt/guac/guacgql"]
+          args:
+            - "--gql-backend"
+            - "keyvalue"
+            - "--kv-store"
+            - "memmap"
+            - "--gql-listen-port"
+            - "8080"
+            - "--gql-debug"
+            - "--enable-prometheus=false"
+          ports:
+            - containerPort: 8080
+              name: graphql
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "200m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: guac-graphql
+  labels:
+    app: guac-graphql
+spec:
+  selector:
+    app: guac-graphql
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: graphql
+  type: ClusterIP
+---
+# GUAC Ingestor — watches for new SBOMs / VEX / SLSA docs
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: guac-collectsub
+  labels:
+    app: guac-collectsub
+    app.kubernetes.io/part-of: trusted-software-supply-chain
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: guac-collectsub
+  template:
+    metadata:
+      labels:
+        app: guac-collectsub
+    spec:
+      containers:
+        - name: collectsub
+          image: ghcr.io/guacsec/guac:v0.10.0
+          command: ["/opt/guac/guaccsub"]
+          args:
+            - "--csub-listen-port"
+            - "2782"
+          ports:
+            - containerPort: 2782
+              name: csub
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "250m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: guac-collectsub
+  labels:
+    app: guac-collectsub
+spec:
+  selector:
+    app: guac-collectsub
+  ports:
+    - port: 2782
+      targetPort: 2782
+      name: csub
+  type: ClusterIP

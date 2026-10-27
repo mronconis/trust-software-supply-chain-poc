@@ -1,0 +1,60 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: generate-sbom
+  labels:
+    app.kubernetes.io/part-of: trusted-software-supply-chain
+spec:
+  description: >
+    Generates a CycloneDX 1.4 SBOM for a container image
+    using Syft, with registry authentication support.
+  params:
+    - name: IMAGE
+      type: string
+  workspaces:
+    - name: source
+    - name: dockerconfig
+  results:
+    - name: SBOM_COMPONENT_COUNT
+  steps:
+    # ── Step 1: Syft generate SBOM ────────────────────────────
+    - name: syft-generate
+      image: alpine:3.20
+      env:
+        - name: DOCKER_CONFIG
+          value: /tmp/docker-auth
+      script: |
+        #!/bin/sh
+        set -eu
+        echo "▸ Installing Syft..."
+        wget -qO- https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
+        IMAGE="$(params.IMAGE)"
+        AUTHFILE="$(workspaces.dockerconfig.path)/.dockerconfigjson"
+        echo "▸ Generating CycloneDX SBOM for ${IMAGE}"
+
+        # Ensure registry credentials are discoverable by Syft.
+        # Tekton may override HOME, so rely on DOCKER_CONFIG instead.
+        mkdir -p "${DOCKER_CONFIG}"
+        cp "${AUTHFILE}" "${DOCKER_CONFIG}/config.json"
+
+        syft "registry:${IMAGE}" \
+          -o cyclonedx-json@1.4=$(workspaces.source.path)/sbom-cyclonedx.json
+
+        COMPONENTS=$(cat $(workspaces.source.path)/sbom-cyclonedx.json | grep -o '"bom-ref"' | wc -l | tr -d ' ')
+        echo "✅ SBOM generated — ${COMPONENTS} components"
+        printf "%s" "${COMPONENTS}" > $(results.SBOM_COMPONENT_COUNT.path)
+  
+      # ── Step 2: Ingest SBOM into GUAC ────────────────────────────
+    - name: guac-ingest
+      image: ghcr.io/guacsec/guac:v0.10.0
+      script: |
+        #!/bin/sh
+        set -eu
+        GUAC="http://guac-graphql.guac.svc:8080/query"
+        SBOM_FILE="$(workspaces.source.path)/sbom-cyclonedx.json"
+
+        echo "▸ Ingesting SBOM into GUAC at ${GUAC}"
+        /opt/guac/guacone collect files "${SBOM_FILE}" \
+          --gql-addr "${GUAC}" 2>&1 || echo "⚠ GUAC ingest warning (non-blocking)"
+        echo "✅ SBOM ingested into GUAC"

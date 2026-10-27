@@ -1,0 +1,72 @@
+# StackRox Central Services — Helm values for Kind PoC
+#
+# Tuned for a local Kind cluster with limited resources (4 CPU / 16 GiB).
+# In production, deploy via the ACS operator on OpenShift.
+#
+# Chart: stackrox/stackrox-central-services
+# Repo:  https://raw.githubusercontent.com/stackrox/helm-charts/main/opensource/
+# ─────────────────────────────────────────────────────────────────
+
+central:
+  adminPassword:
+    value: "stackrox"                       # PoC-only — override in production
+
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "4Gi"
+      cpu: "2000m"
+
+  persistence:
+    persistentVolumeClaim:
+      size: 5Gi                             # Minimal for PoC
+
+  # Expose Central UI and API via NodePort on 30443
+  # kind-config.yaml maps hostPort 30443 → containerPort 30443
+  exposure:
+    loadBalancer:
+      enabled: false
+    nodePort:
+      enabled: true
+      port: 30443
+    route:
+      enabled: false
+
+  db:
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "250m"
+      limits:
+        memory: "4Gi"
+        cpu: "2000m"
+    persistence:
+      persistentVolumeClaim:
+        size: 5Gi
+
+# Legacy Scanner — 1 replica, minimal resources
+scanner:
+  disable: false
+  replicas: 1
+  autoscaling:
+    disable: true
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "2500Mi"
+      cpu: "2000m"
+  dbResources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "2Gi"
+      cpu: "2000m"
+
+# Scanner V4 — disabled to save resources on kind
+scannerV4:
+  disable: true
