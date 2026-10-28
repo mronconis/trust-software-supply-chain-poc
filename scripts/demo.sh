@@ -62,7 +62,7 @@ done
 banner "TRUSTED SOFTWARE SUPPLY CHAIN — LIVE DEMO"
 
 echo "  This demo walks through a real supply-chain security workflow"
-echo "  using Tekton pipelines, StackRox/ACS, Quay.io, Sigstore/Cosign, and GUAC."
+echo "  using Tekton, StackRox/ACS, Quay.io, Sigstore/Cosign, GUAC, and Trustify."
 echo ""
 echo "    Phase 1 — Show vulnerable dependency (Log4Shell CVE-2021-44228)"
 echo "    Phase 2 — Pipeline pulls from GitHub, StackRox detects CVE, BLOCKS release"
@@ -246,8 +246,9 @@ echo -e "${GREEN}║${NC}  critical CVEs can be cryptographically signed        
 echo -e "${GREEN}║${NC}  and promoted to production.                             ${GREEN}║${NC}"
 echo -e "${GREEN}║                                                         ║${NC}"
 echo -e "${GREEN}║${NC}  Registry : quay.io/mronconi/trusted-supply-chain-app    ${GREEN}║${NC}"
-echo -e "${GREEN}║${NC}  ACS UI   : https://localhost:30443                      ${GREEN}║${NC}"
-echo -e "${GREEN}║${NC}  GUAC UI  : http://localhost:3000                        ${GREEN}║${NC}"
+echo -e "${GREEN}║${NC}  ACS UI     : https://localhost:30443                    ${GREEN}║${NC}"
+echo -e "${GREEN}║${NC}  GUAC UI    : http://localhost:3000                      ${GREEN}║${NC}"
+echo -e "${GREEN}║${NC}  Trustify   : http://localhost:8084                      ${GREEN}║${NC}"
 echo -e "${GREEN}║                                                         ║${NC}"
 echo -e "${GREEN}╚═══════════════════════════════════════════════════════════╝${NC}"
 

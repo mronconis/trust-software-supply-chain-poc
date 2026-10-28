@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # 01-bootstrap-cluster.sh
-# Creates Kind cluster and installs Tekton Pipelines + GUAC + StackRox
+# Creates Kind cluster and installs Tekton Pipelines + GUAC + Trustify + StackRox
 #
 set -euo pipefail
 
@@ -13,6 +13,7 @@ KIND_CLUSTER_NAME="tssc"
 
 NAMESPACE="trusted-supply-chain"
 GUAC_NS="guac"
+TRUSTIFY_NS="trustify"
 STACKROX_NS="stackrox"
 
 ROX_ADMIN_PASSWORD="stackrox"
@@ -34,7 +35,7 @@ done
 
 # ── Step 1: Create Kind cluster ──────────────────────────────────
 echo ""
-echo "▸ [1/8] Creating Kind cluster: ${KIND_CLUSTER_NAME}"
+echo "▸ [1/10] Creating Kind cluster: ${KIND_CLUSTER_NAME}"
 if kind get clusters 2>/dev/null | grep -q "${KIND_CLUSTER_NAME}"; then
   echo "  ⚠ Cluster '${KIND_CLUSTER_NAME}' already exists, skipping creation."
 else
@@ -46,12 +47,12 @@ kubectl cluster-info --context "kind-${KIND_CLUSTER_NAME}"
 
 # ── Step 2: Create namespace ─────────────────────────────────────
 echo ""
-echo "▸ [2/8] Creating namespace: ${NAMESPACE}"
+echo "▸ [2/10] Creating namespace: ${NAMESPACE}"
 kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
 
 # ── Step 3: Install Tekton Pipelines ─────────────────────────────
 echo ""
-echo "▸ [3/8] Installing Tekton Pipelines (${TEKTON_VERSION})"
+echo "▸ [3/10] Installing Tekton Pipelines (${TEKTON_VERSION})"
 kubectl apply --filename "https://storage.googleapis.com/tekton-releases/pipeline/${TEKTON_VERSION}/release.yaml"
 
 echo "  ⏳ Waiting for Tekton Pipelines to be ready..."
@@ -69,7 +70,7 @@ echo "  ✅ Tekton Pipelines installed and ready"
 
 # ── Step 4: Deploy GUAC ──────────────────────────────────────────
 echo ""
-echo "▸ [4/8] Deploying GUAC (upstream Trusted Profile Analyzer)"
+echo "▸ [4/10] Deploying GUAC (dependency graph analysis)"
 kubectl create namespace "${GUAC_NS}" --dry-run=client -o yaml | kubectl apply -f -
 kubectl apply -n "${GUAC_NS}" -f "${ROOT_DIR}/guac/guac-deployment.yaml"
 
@@ -83,7 +84,7 @@ echo "  ✅ GUAC deployed"
 
 # ── Step 5: Deploy GUAC Visualizer ────────────────────────────────
 echo ""
-echo "▸ [5/8] Deploying GUAC Visualizer"
+echo "▸ [5/10] Deploying GUAC Visualizer"
 kubectl apply -n "${GUAC_NS}" -f "${ROOT_DIR}/guac/guac-visualizer.yaml"
 
 echo "  ⏳ Waiting for GUAC Visualizer to be ready..."
@@ -94,9 +95,29 @@ kubectl wait --for=condition=Available \
 
 echo "  ✅ GUAC Visualizer deployed"
 
-# ── Step 6: Install StackRox Central Services (ACS) ──────────────
+# ── Step 6: Deploy Trustify (upstream Trusted Profile Analyzer) ──
 echo ""
-echo "▸ [6/8] Installing StackRox Central Services (ACS)"
+echo "▸ [6/10] Deploying Trustify (upstream Trusted Profile Analyzer)"
+kubectl create namespace "${TRUSTIFY_NS}" --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -n "${TRUSTIFY_NS}" -f "${ROOT_DIR}/trustify/trustify-deployment.yaml"
+
+echo "  ⏳ Waiting for Trustify database to be ready..."
+kubectl wait --for=condition=Available \
+  deployment/trustify-db \
+  -n "${TRUSTIFY_NS}" \
+  --timeout=180s || echo "  ⚠ Trustify DB may need more time — continuing..."
+
+echo "  ⏳ Waiting for Trustify server to be ready..."
+kubectl wait --for=condition=Available \
+  deployment/trustify-server \
+  -n "${TRUSTIFY_NS}" \
+  --timeout=300s || echo "  ⚠ Trustify server may need more time — continuing..."
+
+echo "  ✅ Trustify deployed"
+
+# ── Step 7: Install StackRox Central Services (ACS) ──────────────
+echo ""
+echo "▸ [7/10] Installing StackRox Central Services (ACS)"
 
 helm repo add stackrox \
   https://raw.githubusercontent.com/stackrox/helm-charts/main/opensource/ \
@@ -266,15 +287,15 @@ json.dump(p, sys.stdout)
   configure_policy_enforcement "Fixable Severity at least Important" '[]'
 fi
 
-# ── Step 7: Install Tekton Tasks and Pipeline ─────────────────────
+# ── Step 8: Install Tekton Tasks and Pipeline ─────────────────────
 echo ""
-echo "▸ [7/8] Installing Tekton Tasks and Pipeline"
+echo "▸ [8/10] Installing Tekton Tasks and Pipeline"
 kubectl apply -n "${NAMESPACE}" -f "${ROOT_DIR}/tekton/tasks/"
 kubectl apply -n "${NAMESPACE}" -f "${ROOT_DIR}/tekton/pipelines/trusted-supply-chain.yaml"
 
-# ── Step 8: Setup Credentials ─────────────────────────────────────
+# ── Step 9: Setup Credentials ─────────────────────────────────────
 echo ""
-echo "▸ [8/8] Setting up credentials"
+echo "▸ [9/10] Setting up credentials"
 
 # ── Load credentials from .env ───────────────────────────────────
 ENV_FILE="${ROOT_DIR}/.env"
@@ -358,11 +379,12 @@ else
   echo "          --dry-run=client -o yaml | kubectl apply -f -"
 fi
 
-# ── Step 9: Port Forward GUAC Visualizer ───────────────────────────
+# ── Step 10: Port Forwards ─────────────────────────────────────────
 echo ""
-echo "▸ [9/8] Port forwarding GUAC Visualizer"
+echo "▸ [10/10] Setting up port forwards"
 kubectl port-forward -n "${GUAC_NS}" svc/guac-visualizer 3000:3000 &
 kubectl port-forward -n "${GUAC_NS}" svc/guac-graphql 8085:8080 &
+kubectl port-forward -n "${TRUSTIFY_NS}" svc/trustify-server 8084:8080 &
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║  ✅ Bootstrap complete!                                      ║"
@@ -370,6 +392,7 @@ echo "║                                                              ║"
 echo "║  StackRox Central UI : https://localhost:30443               ║"
 echo "║                        (admin / stackrox)                    ║"
 echo "║  GUAC Visualizer     : http://localhost:3000                 ║"
+echo "║  Trustify UI         : http://localhost:8084                 ║"
 echo "║                                                              ║"
 echo "║  Next: run ./scripts/02-run-pipeline.sh                      ║"
 echo "╚══════════════════════════════════════════════════════════════╝"

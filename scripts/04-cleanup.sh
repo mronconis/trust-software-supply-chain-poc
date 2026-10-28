@@ -32,9 +32,10 @@ rm -rf "${KEYS_DIR}"
 
 # ── Step 3: Delete port-forward processes ────────────────────────
 echo ""
-echo "▸ [4/4] Killing kubectl port-forward processes for GUAC Visualizer and GraphQL"
-pkill -f "kubectl port-forward.*svc/guac-visualizer"
-pkill -f "kubectl port-forward.*svc/guac-graphql"
+echo "▸ [3/4] Killing kubectl port-forward processes"
+pkill -f "kubectl port-forward.*svc/guac-visualizer" 2>/dev/null || true
+pkill -f "kubectl port-forward.*svc/guac-graphql" 2>/dev/null || true
+pkill -f "kubectl port-forward.*svc/trustify-server" 2>/dev/null || true
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"

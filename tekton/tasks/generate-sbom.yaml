@@ -58,3 +58,54 @@ spec:
         /opt/guac/guacone collect files "${SBOM_FILE}" \
           --gql-addr "${GUAC}" 2>&1 || echo "⚠ GUAC ingest warning (non-blocking)"
         echo "✅ SBOM ingested into GUAC"
+
+      # ── Step 3: Ingest SBOM into Trustify (TPA) ─────────────────
+    - name: trustify-ingest
+      image: alpine:3.20
+      script: |
+        #!/bin/sh
+        set -eu
+        apk add --no-cache -q curl 2>/dev/null || true
+
+        TRUSTIFY_URL="http://trustify-server.trustify.svc:8080"
+        SBOM_FILE="$(workspaces.source.path)/sbom-cyclonedx.json"
+
+        echo "╔═══════════════════════════════════════════════════════════╗"
+        echo "║  TRUSTIFY SBOM INGESTION                                 ║"
+        echo "╠═══════════════════════════════════════════════════════════╣"
+        echo "║  Endpoint : ${TRUSTIFY_URL}                              ║"
+        echo "╚═══════════════════════════════════════════════════════════╝"
+
+        echo "▸ Waiting for Trustify to be reachable..."
+        RETRIES=0
+        MAX_RETRIES=12
+        while [ "${RETRIES}" -lt "${MAX_RETRIES}" ]; do
+          if curl -sf "${TRUSTIFY_URL}/" >/dev/null 2>&1; then
+            break
+          fi
+          RETRIES=$((RETRIES + 1))
+          printf "  attempt %s/%s\r" "${RETRIES}" "${MAX_RETRIES}"
+          sleep 5
+        done
+
+        if [ "${RETRIES}" -eq "${MAX_RETRIES}" ]; then
+          echo "⚠ Trustify not reachable after ${MAX_RETRIES} attempts — skipping ingestion (non-blocking)"
+          exit 0
+        fi
+
+        echo "▸ Uploading CycloneDX SBOM to Trustify..."
+        HTTP_CODE=$(curl -s -o /tmp/trustify-response.json -w "%{http_code}" \
+          -X POST \
+          --data-binary "@${SBOM_FILE}" \
+          -H "Content-Type: application/json" \
+          "${TRUSTIFY_URL}/api/v2/sbom" 2>&1) || true
+
+        if [ "${HTTP_CODE}" = "201" ] || [ "${HTTP_CODE}" = "200" ]; then
+          echo "✅ SBOM ingested into Trustify (HTTP ${HTTP_CODE})"
+          cat /tmp/trustify-response.json 2>/dev/null || true
+          echo ""
+        else
+          echo "⚠ Trustify ingestion returned HTTP ${HTTP_CODE} (non-blocking)"
+          cat /tmp/trustify-response.json 2>/dev/null || true
+          echo ""
+        fi

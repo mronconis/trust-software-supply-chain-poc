@@ -1,0 +1,227 @@
+---
+# Trustify (upstream of Red Hat Trusted Profile Analyzer — TPA)
+#
+# Deploys a minimal Trustify instance for the PoC:
+# - PostgreSQL database
+# - Trustify API server (auth disabled for PoC)
+# - Filesystem storage for SBOMs and advisories
+#
+# In production, deploy via the Trustify Helm chart with Keycloak OIDC,
+# S3-compatible storage, and proper resource sizing.
+# Helm chart: https://github.com/trustification/trustify-helm-charts
+---
+
+# ── PostgreSQL PVC ────────────────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: trustify-db-pvc
+  labels:
+    app: trustify-db
+    app.kubernetes.io/part-of: trusted-software-supply-chain
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+# ── Trustify Storage PVC ─────────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: trustify-storage-pvc
+  labels:
+    app: trustify-server
+    app.kubernetes.io/part-of: trusted-software-supply-chain
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+# ── PostgreSQL Deployment ─────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trustify-db
+  labels:
+    app: trustify-db
+    app.kubernetes.io/part-of: trusted-software-supply-chain
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trustify-db
+  template:
+    metadata:
+      labels:
+        app: trustify-db
+    spec:
+      containers:
+        - name: postgres
+          image: docker.io/library/postgres:17
+          env:
+            - name: POSTGRES_USER
+              value: "trustify"
+            - name: POSTGRES_PASSWORD
+              value: "trustify1234"
+            - name: POSTGRES_DB
+              value: "trustify"
+          ports:
+            - containerPort: 5432
+              name: postgres
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "trustify"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "trustify"]
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          volumeMounts:
+            - name: db-data
+              mountPath: /var/lib/postgresql/data
+              subPath: pgdata
+      volumes:
+        - name: db-data
+          persistentVolumeClaim:
+            claimName: trustify-db-pvc
+
+---
+# ── PostgreSQL Service ────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: trustify-db
+  labels:
+    app: trustify-db
+spec:
+  selector:
+    app: trustify-db
+  ports:
+    - port: 5432
+      targetPort: 5432
+      name: postgres
+  type: ClusterIP
+
+---
+# ── Trustify Server Deployment ────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trustify-server
+  labels:
+    app: trustify-server
+    app.kubernetes.io/part-of: trusted-software-supply-chain
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trustify-server
+  template:
+    metadata:
+      labels:
+        app: trustify-server
+    spec:
+      initContainers:
+        # Wait for PostgreSQL to be ready before starting Trustify
+        - name: wait-for-db
+          image: docker.io/library/postgres:17
+          command: ["sh", "-c"]
+          args:
+            - |
+              echo "Waiting for PostgreSQL..."
+              until pg_isready -h trustify-db -p 5432 -U trustify; do
+                sleep 2
+              done
+              echo "PostgreSQL is ready"
+          env:
+            - name: PGPASSWORD
+              value: "trustify1234"
+      containers:
+        - name: trustd
+          image: ghcr.io/guacsec/trustd:latest
+          command: ["/usr/local/bin/trustd"]
+          args:
+            - "api"
+            - "--auth-disabled"
+          env:
+            # Database configuration
+            - name: TRUSTD_DB_HOST
+              value: "trustify-db"
+            - name: TRUSTD_DB_PORT
+              value: "5432"
+            - name: TRUSTD_DB_NAME
+              value: "trustify"
+            - name: TRUSTD_DB_USER
+              value: "trustify"
+            - name: TRUSTD_DB_PASSWORD
+              value: "trustify1234"
+            - name: TRUSTD_DB_SSLMODE
+              value: "disable"
+            # Storage configuration (filesystem)
+            - name: TRUSTD_STORAGE_STRATEGY
+              value: "fs"
+            - name: TRUSTD_STORAGE_FS_PATH
+              value: "/data/storage"
+          ports:
+            - containerPort: 8080
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 5
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          volumeMounts:
+            - name: storage
+              mountPath: /data/storage
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: trustify-storage-pvc
+
+---
+# ── Trustify Server Service ──────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: trustify-server
+  labels:
+    app: trustify-server
+spec:
+  selector:
+    app: trustify-server
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: http
+  type: ClusterIP
