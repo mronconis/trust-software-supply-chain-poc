@@ -15,7 +15,7 @@ ROOT_DIR="$(dirname "${SCRIPT_DIR}")"
 APP_DIR="${ROOT_DIR}/quarkus-app"
 
 QUAY_IMAGE="quay.io/mronconi/trusted-supply-chain-app"
-GIT_URL="https://github.com/mronconis/trust-supply-chain-poc.git"
+GIT_URL="https://github.com/mronconis/trust-software-supply-chain-poc.git"
 GIT_REVISION="main"
 NS="trusted-supply-chain"
 

@@ -151,6 +151,31 @@ spec:
           env:
             - name: PGPASSWORD
               value: "trustify1234"
+        # Run database migrations before the server starts
+        - name: migrate-db
+          image: ghcr.io/guacsec/trustd:latest
+          command: ["trustd"]
+          args: ["db", "migrate"]
+          env:
+            - name: TRUSTD_DB_HOST
+              value: "trustify-db"
+            - name: TRUSTD_DB_PORT
+              value: "5432"
+            - name: TRUSTD_DB_NAME
+              value: "trustify"
+            - name: TRUSTD_DB_USER
+              value: "trustify"
+            - name: TRUSTD_DB_PASSWORD
+              value: "trustify1234"
+            - name: TRUSTD_DB_SSLMODE
+              value: "disable"
+            - name: TRUSTD_STORAGE_STRATEGY
+              value: "fs"
+            - name: TRUSTD_STORAGE_FS_PATH
+              value: "/data/storage"
+          volumeMounts:
+            - name: storage
+              mountPath: /data/storage
       containers:
         - name: trustd
           image: ghcr.io/guacsec/trustd:latest
@@ -159,6 +184,9 @@ spec:
             - "api"
             - "--auth-disabled"
           env:
+            # HTTP bind — listen on all interfaces (not just localhost)
+            - name: HTTP_SERVER_BIND_ADDR
+              value: "::"
             # Database configuration
             - name: TRUSTD_DB_HOST
               value: "trustify-db"

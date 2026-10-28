@@ -14,7 +14,7 @@ spec:
       default: "quay.io/mronconi/trusted-supply-chain-app:latest"
     - name: GIT_URL
       type: string
-      default: "https://github.com/mronconis/trust-supply-chain-poc.git"
+      default: "https://github.com/mronconis/trust-software-supply-chain-poc.git"
     - name: GIT_REVISION
       type: string
       default: "main"
