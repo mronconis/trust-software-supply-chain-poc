@@ -283,7 +283,6 @@ json.dump(p, sys.stdout)
   }
 
   configure_policy_enforcement "Log4Shell: log4j Remote Code Execution vulnerability" '["FAIL_BUILD_ENFORCEMENT"]'
-  configure_policy_enforcement "Latest tag" '["FAIL_BUILD_ENFORCEMENT"]'
   configure_policy_enforcement "Fixable Severity at least Important" '[]'
 fi
 

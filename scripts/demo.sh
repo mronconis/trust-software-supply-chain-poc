@@ -4,20 +4,24 @@
 #
 # Demonstrates:
 #   1. Pipeline FAILS on a CRITICAL CVE (Log4Shell in log4j-core 2.14.1)
-#   2. Developer applies a fix (upgrades log4j-core to 2.24.3)
-#   3. Pipeline PASSES after the fix — image is signed on Quay.io
-#   4. cosign verify proves only the fixed image is signed
+#   2. SecOps uploads a Trustify VEX (not_affected) → gate PASSES without upgrading
+#   3. Developer applies a real fix (upgrades log4j-core to 2.24.3)
+#   4. Pipeline PASSES on fixed code — image is signed on Quay.io
+#   5. cosign verify proves only gate-approved images are signed
 #
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "${SCRIPT_DIR}")"
 APP_DIR="${ROOT_DIR}/quarkus-app"
+VEX_FILE="${ROOT_DIR}/trustify/quarkus-log4j-vex.csaf.json"
 
-QUAY_IMAGE="quay.io/mronconi/trusted-supply-chain-app"
+QUAY_IMAGE="quay.io/mronconi/trusted-quarkus-app"
 GIT_URL="https://github.com/mronconis/trust-software-supply-chain-poc.git"
 GIT_REVISION="main"
 NS="trusted-supply-chain"
+TRUSTIFY_URL="${TRUSTIFY_URL:-http://localhost:8084}"
+PIPELINE_NAME="${PIPELINE_NAME:-trusted-supply-chain}"
 
 ENV_FILE="${ROOT_DIR}/.env"
 if [ -f "${ENV_FILE}" ]; then
@@ -48,16 +52,38 @@ pause() {
   read -r
 }
 
+start_pipeline() {
+  local image_tag="$1"
+  tkn pipeline start "${PIPELINE_NAME}" \
+    --namespace "${NS}" \
+    --param IMAGE="${QUAY_IMAGE}:${image_tag}" \
+    --param GIT_URL="${GIT_URL}" \
+    --param GIT_REVISION="${GIT_REVISION}" \
+    --param APP_CONTEXT="quarkus-app" \
+    --param ROX_CENTRAL_ADDRESS="${ROX_CENTRAL_ADDRESS}" \
+    --workspace name=shared-workspace,volumeClaimTemplateFile="${ROOT_DIR}/tekton/pipelines/workspace-template.yaml" \
+    --workspace name=cosign-keys,secret=cosign-keys \
+    --workspace name=dockerconfig,secret=quay-registry-secret \
+    --workspace name=roxctl-secret,secret=stackrox-secret \
+    --use-param-defaults \
+    --showlog
+}
+
 # ══════════════════════════════════════════════════════════
 # PRE-FLIGHT
 # ══════════════════════════════════════════════════════════
 
-for cmd in tkn cosign kubectl; do
+for cmd in tkn cosign kubectl curl; do
   if ! command -v "${cmd}" &> /dev/null; then
     echo "❌ '${cmd}' not found. Please install it first."
     exit 1
   fi
 done
+
+if [ ! -f "${VEX_FILE}" ]; then
+  echo "❌ VEX file not found: ${VEX_FILE}"
+  exit 1
+fi
 
 banner "TRUSTED SOFTWARE SUPPLY CHAIN — LIVE DEMO"
 
@@ -65,15 +91,18 @@ echo "  This demo walks through a real supply-chain security workflow"
 echo "  using Tekton, StackRox/ACS, Quay.io, Sigstore/Cosign, GUAC, and Trustify."
 echo ""
 echo "    Phase 1 — Show vulnerable dependency (Log4Shell CVE-2021-44228)"
-echo "    Phase 2 — Pipeline pulls from GitHub, StackRox detects CVE, BLOCKS release"
-echo "    Phase 3 — Developer fixes the code, commits, pushes to GitHub"
-echo "    Phase 4 — Pipeline passes, image is SIGNED on Quay.io"
-echo "    Phase 5 — Verify the signature with cosign"
+echo "    Phase 2 — Pipeline detects CVE via StackRox and BLOCKS release"
+echo "    Phase 3 — Upload Trustify VEX (not_affected) → gate PASSES"
+echo "    Phase 4 — Developer upgrades log4j (true remediation)"
+echo "    Phase 5 — Pipeline passes on fixed code, image SIGNED"
+echo "    Phase 6 — Verify signatures with cosign"
 echo ""
 echo "  Registry   : ${QUAY_IMAGE}"
 echo "  Source     : ${GIT_URL}"
+echo "  Pipeline   : ${PIPELINE_NAME}"
 echo "  ACS Central: ${ROX_CENTRAL_ADDRESS}"
 echo "  ACS UI     : https://localhost:30443  (admin / stackrox)"
+echo "  Trustify   : ${TRUSTIFY_URL}"
 
 pause
 
@@ -119,39 +148,74 @@ echo -e "  ${YELLOW}The pipeline will:${NC}"
 echo "    1. Clone source from GitHub"
 echo "    2. Build container image with Buildah"
 echo "    3. Push to Quay.io"
-echo "    4. Generate SBOM with Syft"
+echo "    4. Generate SBOM with Syft → ingest into GUAC + Trustify"
 echo "    5. Scan with StackRox (roxctl) → detect Log4Shell"
-echo -e "    6. ACS build-time policy violation → ${RED}BLOCK the release${NC}"
+echo "    6. Consult Trustify VEX — no not_affected statement yet"
+echo -e "    7. ACS build-time policy violation → ${RED}BLOCK the release${NC}"
 echo ""
 
-tkn pipeline start trusted-supply-chain-quay \
-  --namespace "${NS}" \
-  --param IMAGE="${QUAY_IMAGE}:vulnerable" \
-  --param GIT_URL="${GIT_URL}" \
-  --param GIT_REVISION="${GIT_REVISION}" \
-  --param APP_CONTEXT="quarkus-app" \
-  --param ROX_CENTRAL_ADDRESS="${ROX_CENTRAL_ADDRESS}" \
-  --workspace name=shared-workspace,volumeClaimTemplateFile="${ROOT_DIR}/tekton/pipelines/workspace-template.yaml" \
-  --workspace name=cosign-keys,secret=cosign-keys \
-  --workspace name=dockerconfig,secret=quay-registry-secret \
-  --workspace name=roxctl-secret,secret=stackrox-secret \
-  --use-param-defaults \
-  --showlog 2>&1 || true
+start_pipeline "vulnerable" 2>&1 || true
 
 echo ""
 echo -e "  ${RED}╔═══════════════════════════════════════════════════════════╗${NC}"
-echo -e "  ${RED}║  Pipeline FAILED — StackRox build-time policy violated.   ║${NC}"
+echo -e "  ${RED}║  Pipeline FAILED — StackRox policy not waived by VEX.     ║${NC}"
 echo -e "  ${RED}║  The image was NOT signed. cosign verify would fail.     ║${NC}"
 echo -e "  ${RED}╚═══════════════════════════════════════════════════════════╝${NC}"
 
 pause
 
 # ══════════════════════════════════════════════════════════
-# PHASE 3 — Apply the fix, commit, push
+# PHASE 3 — Upload VEX → EXPECTED SUCCESS (same vulnerable code)
 # ══════════════════════════════════════════════════════════
-banner "PHASE 3 — Applying the fix"
+banner "PHASE 3 — Upload Trustify VEX (CVE-2021-44228 not_affected)"
 
-echo "  Upgrading log4j-core from 2.14.1 → 2.24.3 ..."
+echo "  SecOps documents that Log4Shell is a false positive for this deployment"
+echo "  (JNDI lookup disabled / unreachable) via CSAF VEX:"
+echo ""
+echo "    ${VEX_FILE}"
+echo ""
+echo "  Uploading advisory to Trustify at ${TRUSTIFY_URL} ..."
+
+HTTP_CODE=$(curl -s -o /tmp/trustify-vex-upload.json -w "%{http_code}" \
+  -X POST \
+  -H "Content-Type: application/json" \
+  --data-binary @"${VEX_FILE}" \
+  "${TRUSTIFY_URL}/api/v3/advisory" || echo "000")
+
+if [ "${HTTP_CODE}" = "200" ] || [ "${HTTP_CODE}" = "201" ]; then
+  echo -e "  ${GREEN}✓${NC} VEX uploaded (HTTP ${HTTP_CODE})"
+  cat /tmp/trustify-vex-upload.json 2>/dev/null || true
+  echo ""
+else
+  echo -e "  ${YELLOW}⚠${NC} Trustify returned HTTP ${HTTP_CODE} (advisory may already exist)"
+  cat /tmp/trustify-vex-upload.json 2>/dev/null || true
+  echo ""
+fi
+
+echo ""
+echo -e "  ${GREEN}Re-running the pipeline on the SAME vulnerable code.${NC}"
+echo -e "  ${GREEN}StackRox still finds CVE-2021-44228, but Trustify waives it.${NC}"
+echo ""
+
+pause
+
+start_pipeline "vex-waived" 2>&1
+
+echo ""
+echo -e "  ${GREEN}╔═══════════════════════════════════════════════════════════╗${NC}"
+echo -e "  ${GREEN}║  Pipeline PASSED — VEX not_affected waived the CVE.      ║${NC}"
+echo -e "  ${GREEN}║  Image :vex-waived was SIGNED despite vulnerable log4j.  ║${NC}"
+echo -e "  ${GREEN}╚═══════════════════════════════════════════════════════════╝${NC}"
+
+pause
+
+# ══════════════════════════════════════════════════════════
+# PHASE 4 — Apply the fix, commit, push
+# ══════════════════════════════════════════════════════════
+banner "PHASE 4 — Applying a real fix (upgrade log4j)"
+
+echo "  VEX waivers manage false positives. For a true remediation,"
+echo "  upgrade log4j-core from 2.14.1 → 2.24.3 ..."
 echo ""
 
 # Apply the fix
@@ -175,48 +239,45 @@ echo -e "  ${GREEN}✓${NC} Fix pushed to GitHub"
 pause
 
 # ══════════════════════════════════════════════════════════
-# PHASE 4 — Run pipeline → EXPECTED SUCCESS
+# PHASE 5 — Run pipeline → EXPECTED SUCCESS
 # ══════════════════════════════════════════════════════════
-banner "PHASE 4 — Running pipeline on fixed code (expecting SUCCESS)"
+banner "PHASE 5 — Running pipeline on fixed code (expecting SUCCESS)"
 
-echo -e "  ${GREEN}Log4Shell is gone. ACS build-time policies are now satisfied.${NC}"
-echo -e "  ${GREEN}The pipeline will PASS and the image will be SIGNED on Quay.io.${NC}"
+echo -e "  ${GREEN}Log4Shell is gone from the image. Policies pass without relying on VEX.${NC}"
+echo -e "  ${GREEN}The pipeline will PASS and :latest will be SIGNED on Quay.io.${NC}"
 echo ""
 
-tkn pipeline start trusted-supply-chain-quay \
-  --namespace "${NS}" \
-  --param IMAGE="${QUAY_IMAGE}:latest" \
-  --param GIT_URL="${GIT_URL}" \
-  --param GIT_REVISION="${GIT_REVISION}" \
-  --param APP_CONTEXT="quarkus-app" \
-  --param ROX_CENTRAL_ADDRESS="${ROX_CENTRAL_ADDRESS}" \
-  --workspace name=shared-workspace,volumeClaimTemplateFile="${ROOT_DIR}/tekton/pipelines/workspace-template.yaml" \
-  --workspace name=cosign-keys,secret=cosign-keys \
-  --workspace name=dockerconfig,secret=quay-registry-secret \
-  --workspace name=roxctl-secret,secret=stackrox-secret \
-  --use-param-defaults \
-  --showlog 2>&1
+start_pipeline "latest" 2>&1
 
 echo ""
 echo -e "  ${GREEN}╔═══════════════════════════════════════════════════════════╗${NC}"
-echo -e "  ${GREEN}║  Pipeline PASSED — image is SIGNED and TRUSTED.          ║${NC}"
+echo -e "  ${GREEN}║  Pipeline PASSED — fixed image is SIGNED and TRUSTED.    ║${NC}"
 echo -e "  ${GREEN}╚═══════════════════════════════════════════════════════════╝${NC}"
 
 pause
 
 # ══════════════════════════════════════════════════════════
-# PHASE 5 — Verify with cosign
+# PHASE 6 — Verify with cosign
 # ══════════════════════════════════════════════════════════
-banner "PHASE 5 — Signature verification (cosign verify)"
+banner "PHASE 6 — Signature verification (cosign verify)"
 
 # Authenticate cosign with Quay.io (private registry)
-if [ -n "${QUAY_USERNAME:-}" ] && [ -n "${QUAY_PASSWORD}" ]; then
+if [ -n "${QUAY_USERNAME:-}" ] && [ -n "${QUAY_PASSWORD:-}" ]; then
   echo "${QUAY_PASSWORD}" | cosign login quay.io -u "${QUAY_USERNAME}" --password-stdin 2>/dev/null
 fi
 
+echo "  Verifying the VEX-waived image on Quay.io..."
+echo ""
+cosign verify \
+  --key "${ROOT_DIR}/.keys/cosign.pub" \
+  --insecure-ignore-tlog \
+  "${QUAY_IMAGE}:vex-waived" 2>&1
+
+echo ""
+echo "  ────────────────────────────────────────────────────"
+echo ""
 echo "  Verifying the SIGNED (fixed) image on Quay.io..."
 echo ""
-
 cosign verify \
   --key "${ROOT_DIR}/.keys/cosign.pub" \
   --insecure-ignore-tlog \
@@ -225,7 +286,7 @@ cosign verify \
 echo ""
 echo "  ────────────────────────────────────────────────────"
 echo ""
-echo "  Now verifying the UNSIGNED (vulnerable) image..."
+echo "  Now verifying the UNSIGNED (pre-VEX vulnerable) image..."
 echo ""
 
 cosign verify \
@@ -238,14 +299,14 @@ echo -e "${GREEN}╔════════════════════
 echo -e "${GREEN}║                    DEMO COMPLETE                         ║${NC}"
 echo -e "${GREEN}╠═══════════════════════════════════════════════════════════╣${NC}"
 echo -e "${GREEN}║                                                         ║${NC}"
-echo -e "${GREEN}║${NC}  ${RED}✗${NC} Vulnerable image → gate FAILED → NOT signed          ${GREEN}║${NC}"
-echo -e "${GREEN}║${NC}  ${GREEN}✓${NC} Fixed image      → gate PASSED → SIGNED ✓            ${GREEN}║${NC}"
+echo -e "${GREEN}║${NC}  ${RED}✗${NC} Vulnerable (no VEX) → gate FAILED → NOT signed     ${GREEN}║${NC}"
+echo -e "${GREEN}║${NC}  ${GREEN}✓${NC} Vulnerable + VEX    → gate PASSED → SIGNED ✓       ${GREEN}║${NC}"
+echo -e "${GREEN}║${NC}  ${GREEN}✓${NC} Fixed image         → gate PASSED → SIGNED ✓       ${GREEN}║${NC}"
 echo -e "${GREEN}║                                                         ║${NC}"
-echo -e "${GREEN}║${NC}  The pipeline enforces that only images free of          ${GREEN}║${NC}"
-echo -e "${GREEN}║${NC}  critical CVEs can be cryptographically signed           ${GREEN}║${NC}"
-echo -e "${GREEN}║${NC}  and promoted to production.                             ${GREEN}║${NC}"
+echo -e "${GREEN}║${NC}  StackRox enforces build policies; Trustify VEX         ${GREEN}║${NC}"
+echo -e "${GREEN}║${NC}  waives documented false positives (not_affected).      ${GREEN}║${NC}"
 echo -e "${GREEN}║                                                         ║${NC}"
-echo -e "${GREEN}║${NC}  Registry : quay.io/mronconi/trusted-supply-chain-app    ${GREEN}║${NC}"
+echo -e "${GREEN}║${NC}  Registry : quay.io/mronconi/trusted-quarkus-app         ${GREEN}║${NC}"
 echo -e "${GREEN}║${NC}  ACS UI     : https://localhost:30443                    ${GREEN}║${NC}"
 echo -e "${GREEN}║${NC}  GUAC UI    : http://localhost:3000                      ${GREEN}║${NC}"
 echo -e "${GREEN}║${NC}  Trustify   : http://localhost:8084                      ${GREEN}║${NC}"

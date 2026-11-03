@@ -12,7 +12,7 @@ KEYS_DIR="${ROOT_DIR}/.keys"
 KIND_CLUSTER_NAME="tssc"
 
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  Trusted Supply Chain PoC — Cleanup                           ║"
+echo "║  Trusted Supply Chain PoC — Cleanup                          ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 
 # ── Step 1: Delete Kind cluster ────────────────────────────────────

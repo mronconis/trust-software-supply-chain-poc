@@ -98,7 +98,7 @@ spec:
           -X POST \
           --data-binary "@${SBOM_FILE}" \
           -H "Content-Type: application/json" \
-          "${TRUSTIFY_URL}/api/v2/sbom" 2>&1) || true
+          "${TRUSTIFY_URL}/api/v3/sbom" 2>&1) || true
 
         if [ "${HTTP_CODE}" = "201" ] || [ "${HTTP_CODE}" = "200" ]; then
           echo "✅ SBOM ingested into Trustify (HTTP ${HTTP_CODE})"

@@ -7,11 +7,11 @@ metadata:
 spec:
   description: >
     Full trusted supply chain: git clone → build → push to Quay.io →
-    SBOM → GUAC ingest → security gate → cosign sign & verify.
+    SBOM → GUAC/Trustify ingest → VEX-aware security gate → cosign sign & verify.
   params:
     - name: IMAGE
       type: string
-      default: "quay.io/mronconi/trusted-supply-chain-app:latest"
+      default: "quay.io/mronconi/trusted-quarkus-app:latest"
     - name: GIT_URL
       type: string
       default: "https://github.com/mronconis/trust-software-supply-chain-poc.git"
@@ -25,6 +25,10 @@ spec:
       type: string
       default: "central.stackrox.svc:443"
       description: "StackRox/ACS Central endpoint (host:port). Defaults to local StackRox on kind."
+    - name: TRUSTIFY_URL
+      type: string
+      default: "http://trustify-server.trustify.svc:8080"
+      description: "Trustify API base URL for VEX not_affected CVE lookup."
   workspaces:
     - name: shared-workspace
     - name: cosign-keys
@@ -70,7 +74,7 @@ spec:
           workspace: dockerconfig
 
     # ═══════════════════════════════════════════════════════════
-    # Stage 3 — StackRox scan + GUAC ingest + build-time policy gate
+    # Stage 3 — StackRox scan + VEX-aware policy gate (Trustify)
     # ═══════════════════════════════════════════════════════════
     - name: security-gate
       runAfter: [generate-sbom]
@@ -81,6 +85,8 @@ spec:
           value: $(params.IMAGE)
         - name: ROX_CENTRAL_ADDRESS
           value: $(params.ROX_CENTRAL_ADDRESS)
+        - name: TRUSTIFY_URL
+          value: $(params.TRUSTIFY_URL)
       workspaces:
         - name: source
           workspace: shared-workspace
@@ -124,7 +130,7 @@ spec:
               ╠═══════════════════════════════════════════════════════════╣
               ║   Image : $(params.IMAGE)
               ║   Source: $(params.GIT_URL) @ $(params.GIT_REVISION)
-              ║   Gate  : StackRox/ACS build-time policies
+              ║   Gate  : StackRox/ACS + Trustify VEX (not_affected)
               ║                                                         ║
               ║   If any task failed, the image was NOT signed.         ║
               ║   Run: cosign verify --key cosign.pub $(params.IMAGE)   ║

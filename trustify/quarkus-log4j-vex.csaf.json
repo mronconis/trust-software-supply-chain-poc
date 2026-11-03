@@ -1,0 +1,77 @@
+{
+  "document": {
+    "category": "csaf_vex",
+    "csaf_version": "2.0",
+    "title": "VEX Statement for Quarkus Demo Application",
+    "tracking": {
+      "id": "DEMO-VEX-QUARKUS-003",
+      "current_release_date": "2026-11-03T16:30:00Z",
+      "initial_release_date": "2026-11-03T16:30:00Z",
+      "status": "final",
+      "version": "1",
+      "revision_history": [
+        {
+          "date": "2026-11-03T16:30:00Z",
+          "number": "1",
+          "summary": "Initial release"
+        }
+      ]
+    },
+    "publisher": {
+      "category": "vendor",
+      "name": "SecOps Team",
+      "namespace": "https://example.com"
+    }
+  },
+  "product_tree": {
+    "branches": [
+      {
+        "category": "vendor",
+        "name": "Apache",
+        "branches": [
+          {
+            "category": "product_name",
+            "name": "log4j-core",
+            "branches": [
+              {
+                "category": "product_version",
+                "name": "2.14.1",
+                "product": {
+                  "name": "org.apache.logging.log4j:log4j-core:2.14.1",
+                  "product_id": "CSAFPID-LOG4J-2.14.1",
+                  "product_identification_helper": {
+                    "purl": "pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "vulnerabilities": [
+    {
+      "cve": "CVE-2021-44228",
+      "product_status": {
+        "known_not_affected": [
+          "CSAFPID-LOG4J-2.14.1"
+        ]
+      },
+      "flags": [
+        {
+          "product_ids": [
+            "CSAFPID-LOG4J-2.14.1"
+          ],
+          "label": "vulnerable_code_cannot_be_controlled_by_adversary"
+        }
+      ],
+      "threats": [
+        {
+          "category": "impact",
+          "details": "JNDI lookup mechanism is disabled and unreachable in this deployment."
+        }
+      ]
+    }
+  ]
+}

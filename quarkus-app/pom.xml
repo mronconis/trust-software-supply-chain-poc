@@ -9,6 +9,26 @@
     <version>1.0.0-SNAPSHOT</version>
     <packaging>jar</packaging>
 
+    <organization>
+        <name>ACME</name>
+        <url>https://acme.com</url>
+    </organization>
+
+    <developers>
+        <developer>
+            <id>mronconi</id>
+            <name>Marco Ronconi</name>
+            <email>marco.ronconi@gmail.com</email>
+            <organization>ACME</organization>
+            <organizationUrl>https://acme.com</organizationUrl>
+            <roles>
+                <role>Lead Developer</role>
+                <role>Architect</role>
+            </roles>
+            <timezone>+1</timezone>
+        </developer>
+    </developers>
+
     <properties>
         <compiler-plugin.version>3.13.0</compiler-plugin.version>
         <maven.compiler.release>17</maven.compiler.release>

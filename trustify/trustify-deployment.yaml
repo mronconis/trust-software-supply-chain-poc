@@ -24,7 +24,7 @@ spec:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 5Gi
+      storage: 10Gi
 
 ---
 # ── Trustify Storage PVC ─────────────────────────────────
@@ -40,7 +40,7 @@ spec:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 5Gi
+      storage: 10Gi
 
 ---
 # ── PostgreSQL Deployment ─────────────────────────────────
@@ -71,6 +71,14 @@ spec:
               value: "trustify1234"
             - name: POSTGRES_DB
               value: "trustify"
+            - name: CHECKPOINT_TIMEOUT
+              value: "5min"
+            - name: CHECKPOINT_COMPLETION_TARGET
+              value: "0.9"
+            - name: MAX_WAL_SIZE
+              value: "2GB"
+            - name: wal_buffers
+              value: "32MB"
           ports:
             - containerPort: 5432
               name: postgres
@@ -86,11 +94,11 @@ spec:
             periodSeconds: 30
           resources:
             requests:
-              memory: "256Mi"
-              cpu: "100m"
+              memory: "1Gi"
+              cpu: "1000m"
             limits:
-              memory: "512Mi"
-              cpu: "500m"
+              memory: "4Gi"
+              cpu: "2000m"
           volumeMounts:
             - name: db-data
               mountPath: /var/lib/postgresql/data
@@ -187,7 +195,8 @@ spec:
             # HTTP bind — listen on all interfaces (not just localhost)
             - name: HTTP_SERVER_BIND_ADDR
               value: "::"
-            # Database configuration
+            - name: TRUSTD_RECOMMEND_PATTERNS
+              value: "^(.+)[.-]redhat-[0-9]+$,^(.+)[.-]rhlw-[0-9]+$"
             - name: TRUSTD_DB_HOST
               value: "trustify-db"
             - name: TRUSTD_DB_PORT
@@ -224,14 +233,48 @@ spec:
             timeoutSeconds: 5
           resources:
             requests:
-              memory: "512Mi"
-              cpu: "250m"
+              memory: "1Gi"
+              cpu: "500m"
             limits:
-              memory: "2Gi"
+              memory: "4Gi"
               cpu: "1000m"
           volumeMounts:
             - name: storage
               mountPath: /data/storage
+        - name: trustd-importer
+          image: ghcr.io/guacsec/trustd:latest
+          command: ["/usr/local/bin/trustd"]
+          args:
+            - "importer"
+            - "--concurrency=2"
+            - "--working-dir=/tmp/importer"
+          env:
+            - name: TRUSTD_DB_HOST
+              value: "trustify-db"
+            - name: TRUSTD_DB_PORT
+              value: "5432"
+            - name: TRUSTD_DB_NAME
+              value: "trustify"
+            - name: TRUSTD_DB_USER
+              value: "trustify"
+            - name: TRUSTD_DB_PASSWORD
+              value: "trustify1234"
+            - name: TRUSTD_DB_SSLMODE
+              value: "disable"
+            - name: TRUSTD_STORAGE_STRATEGY
+              value: "fs"
+            - name: TRUSTD_STORAGE_FS_PATH
+              value: "/data/storage"
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+          volumeMounts:
+            - name: storage
+              mountPath: "/data/storage"
       volumes:
         - name: storage
           persistentVolumeClaim:
