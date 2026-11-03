@@ -1,19 +1,21 @@
-# Trustify helpers (PoC)
+# Trustify — importers and VEX (PoC)
 
-Import OSV / CSAF feeds and upload a custom VEX so the Tekton **security gate**
-can waive StackRox violations for CVEs marked `not_affected`.
+Helpers for the demo Step 2 in the root [`README.md`](../README.md): load vulnerability intelligence and upload the CSAF VEX that the Tekton **security gate** uses to waive ACS Log4Shell findings.
+
+Trustify UI / API (after bootstrap port-forward): [http://localhost:8084](http://localhost:8084) · OpenAPI at `/openapi/`.
 
 ## Role in the security gate
 
-1. Pipeline uploads the image SBOM to Trustify (`POST /api/v3/sbom`).
-2. SecOps (or this README) uploads a CSAF VEX advisory with `known_not_affected`.
-3. The `security-gate` task queries Trustify for `not_affected` CVEs and filters
-   matching ACS policy violations before deciding pass/fail.
+1. Pipeline uploads the image SBOM (`POST /api/v3/sbom`).
+2. SecOps creates importers (OSV / optional Red Hat CSAF) and uploads a CSAF VEX with `known_not_affected`.
+3. Task `security-gate` loads advisories with `document.category == csaf_vex` and waives matching ACS violations before pass/fail.
 
-Demo VEX document: [`quarkus-log4j-vex.csaf.json`](quarkus-log4j-vex.csaf.json)
-(`CVE-2021-44228` → `known_not_affected` for `log4j-core@2.14.1`).
+Demo VEX: [`quarkus-log4j-vex.csaf.json`](quarkus-log4j-vex.csaf.json)  
+→ `CVE-2021-44228` and `CVE-2021-45046` as `known_not_affected` for `pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1`.
 
-## GitHub OSV (Open Source Vulnerabilities)
+The ACS policy *Log4Shell: log4j Remote Code Execution vulnerability* fails on **both** CVEs; the VEX must cover both.
+
+## GitHub OSV importer
 
 ```bash
 curl -X POST "http://localhost:8084/api/v3/importer/osv-github-2021" \
@@ -29,7 +31,7 @@ curl -X POST "http://localhost:8084/api/v3/importer/osv-github-2021" \
   }'
 ```
 
-## RedHat CSAF (Common Security Advisory Framework)
+## Red Hat CSAF importer (optional)
 
 ```bash
 curl -X POST "http://localhost:8084/api/v3/importer/redhat-csaf-quarkus" \
@@ -50,9 +52,9 @@ curl -X POST "http://localhost:8084/api/v3/importer/redhat-csaf-quarkus" \
   }'
 ```
 
-## Custom Quarkus VEX (CSAF 2.0)
+## Upload demo CSAF VEX
 
-Upload the demo VEX that marks Log4Shell as not affected for this application:
+From the `trustify/` directory (or adjust the path):
 
 ```bash
 curl -X POST "http://localhost:8084/api/v3/advisory" \
@@ -60,5 +62,11 @@ curl -X POST "http://localhost:8084/api/v3/advisory" \
   --data-binary @quarkus-log4j-vex.csaf.json
 ```
 
-After this upload, a pipeline run on the still-vulnerable `log4j-core:2.14.1`
-image should **pass** the security gate because `CVE-2021-44228` is waived via VEX.
+Verify:
+
+```bash
+curl -s "http://localhost:8084/api/v3/advisory?q=DEMO-VEX" | jq '.items[].document_id'
+# → DEMO-VEX-QUARKUS-004
+```
+
+After a successful upload, re-run the pipeline with `./scripts/02-run-pipeline.sh` on the same vulnerable source; the gate should pass and Cosign should sign the image.

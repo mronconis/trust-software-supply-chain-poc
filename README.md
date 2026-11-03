@@ -1,77 +1,62 @@
-# Trusted Software Supply Chain —  Proof of Concept
+# Trusted Software Supply Chain — Proof of Concept
 
-This proof-of-concept demonstrates an end-to-end trusted software supply chain using the upstream projects behind the Red Hat Trusted Software Supply Chain portfolio.
+End-to-end demo of a trusted software supply chain using the upstream projects behind the Red Hat Trusted Software Supply Chain portfolio. The pipeline builds a Quarkus image, generates an SBOM, evaluates ACS build-time policies, and signs the artefact with Cosign — only if a VEX-aware security gate allows it.
 
 ---
 
-## Context
+## What this PoC shows
 
-Every container image deployed to production is the output of a multi-step transformation pipeline: source code is compiled, dependencies are resolved, a container is assembled, and the result is pushed to a registry. **If any link in this chain is compromised, the entire deployment is at risk.** High-profile supply-chain attacks —  SolarWinds, Log4Shell, and xz-utils — have demonstrated that writing secure code is not enough: organisations must be able to **cryptographically prove** that every artefact is intact, that its dependency graph has been analysed for known vulnerabilities, and that a human-defined security policy was enforced before the artifact was signed and promoted.
-
-## Architectural Overview
-This PoC implements a **Trusted Software Supply Chain** that ties together five upstream projects, each mapping directly to a Red Hat product:
-
-| Upstream | Red Hat Product | Role |
-|---|---|---|
-| **Tekton Pipelines** | OpenShift Pipelines | Cloud-native CI/CD pipeline engine |
-| **Sigstore / Cosign** | Trusted Artifact Signer (TAS) | Cryptographic signing and verification of OCI artefacts |
-| **GUAC** | Trusted Profile Analyzer (TPA) | SBOM ingestion, dependency graph analysis, visualisation |
-| **Trustify** | Trusted Profile Analyzer (TPA) | SBOM storage, vulnerability management, compliance dashboard |
-| **StackRox / roxctl** | Advanced Cluster Security (ACS) | Image scanning and build-time policy enforcement |
-| **CycloneDX + Syft** | —  | SBOM generation |
-
-The pipeline clones source from **GitHub**, builds a Quarkus application with **Buildah**, pushes to **Quay.io**, generates a CycloneDX SBOM with **Syft**, ingests it into both **GUAC** (dependency graph) and **Trustify** (vulnerability management), and runs a **blocking security gate**: StackRox/`roxctl` scans the image and evaluates ACS build-time policies, then the gate consults **Trustify VEX** statements. CVEs marked `not_affected` in Trustify are waived and do not fail the pipeline. Only remaining (non-waived) enforced violations block signing. When the gate passes, Cosign signs the image with a static keypair and pushes the signature to the registry.
+1. **ACS blocks** a build that ships Log4Shell (`log4j-core` 2.14.1) when Trustify has no VEX exception.
+2. **SecOps imports** vulnerability intelligence (OSV) and a CSAF VEX that marks the finding as `known_not_affected`.
+3. **The same insecure code passes** the gate: StackRox still reports the CVE; Trustify VEX waives it as a documented false positive; Cosign signs the image.
 
 ```
 ┌──────────┐    ┌──────────┐    ┌───────────────────┐    ┌─────────────────────┐    ┌────────────┐
-│  Source  │───▸│  Build   │───▸│ SBOM + GUAC       │───▸│ Security Gate       │───▸│ Sign + Push│
+│  Source  │───▸│  Build   │───▸│ SBOM + GUAC       │───▸│ Security Gate       │───▸│ Sign       │
 │ (GitHub) │    │(Buildah) │    │       + Trustify  │    │ StackRox + VEX      │    │ (Cosign)   │
 └──────────┘    └──────────┘    └───────────────────┘    └──────────┬──────────┘    └────────────┘
                                    │             │                   │
-                                   ▼             ▼            ACS violation
-                               GUAC          Trustify         after VEX filter?
-                           (dep graph)   (SBOM + VEX)           ╱         ╲
-                                                              YES          NO
-                                                               ↓            ↓
-                                                         ❌ PIPELINE    ✅ IMAGE
-                                                            HALTED       SIGNED
+                                   ▼             ▼            Remaining ACS
+                               GUAC          Trustify         violation after
+                           (dep graph)    (SBOM + VEX)         VEX filter?
+                                                              ╱         ╲
+                                                            YES          NO
+                                                             ↓            ↓
+                                                       ❌ HALTED    ✅ SIGNED
 ```
+
+| Upstream | Red Hat product | Role in this PoC |
+|---|---|---|
+| Tekton Pipelines | OpenShift Pipelines | CI/CD engine |
+| Sigstore / Cosign | Trusted Artifact Signer (TAS) | Image signing |
+| GUAC | Trusted Profile Analyzer (TPA) | Dependency graph |
+| Trustify | Trusted Profile Analyzer (TPA) | SBOM store, advisories, VEX |
+| StackRox / roxctl | Advanced Cluster Security (ACS) | Image scan + build policies |
+| Syft + CycloneDX | — | SBOM generation |
 
 ---
 
-## Repository Layout
+## Repository layout
 
 ```
-trust-software-supply-chain-poc/
-├── quarkus-app/                          # Target Java/Quarkus application
-│   ├── pom.xml                           #   Maven configuration (includes CycloneDX plugin)
-│   ├── Dockerfile                        #   Multi-stage build on UBI9
-│   └── src/                              # Source code of the application
+├── quarkus-app/                     # Sample Quarkus app (deliberately vulnerable log4j)
 ├── tekton/
-│   ├── tasks/                            # Reusable Tekton Task definitions
-│   │   ├── build-and-push.yaml           #   Git clone → Buildah build → registry push
-│   │   ├── generate-sbom.yaml            #   Syft SBOM → GUAC ingest → Trustify ingest
-│   │   ├── security-gate.yaml            #   StackRox scan → VEX-aware policy gate
-│   │   └── sign-and-attest.yaml          #   Cosign attest SBOM → sign → verify
-│   └── pipelines/
-│       ├── trusted-supply-chain.yaml     # Pipeline: GitHub → Buildah → Quay.io → sign
-│       └── workspace-template.yaml       # PVC template
-├── kind-config.yaml                      # Kind cluster configuration
-├── guac/
-│   ├── guac-deployment.yaml              # GUAC server (GraphQL + CollectSub)
-│   └── guac-visualizer.yaml              # GUAC Visualizer (dependency graph UI)
+│   ├── tasks/
+│   │   ├── build-and-push.yaml
+│   │   ├── generate-sbom.yaml       # Syft → GUAC + Trustify ingest
+│   │   ├── security-gate.yaml       # StackRox check + Trustify VEX filter
+│   │   └── sign-and-attest.yaml
+│   └── pipelines/trusted-supply-chain.yaml
 ├── trustify/
-│   ├── trustify-deployment.yaml          # Trustify server + PostgreSQL (SBOM storage & vuln mgmt)
-│   ├── quarkus-log4j-vex.csaf.json       # Demo CSAF VEX (CVE-2021-44228 not_affected)
-│   └── README.md                         # Importers + VEX upload helpers
-├── stackrox/
-│   └── stackrox-central-values.yaml      # Helm values for StackRox Central on Kind
+│   ├── trustify-deployment.yaml
+│   ├── quarkus-log4j-vex.csaf.json  # Demo CSAF VEX (Log4Shell not_affected)
+│   └── README.md                    # Importer / VEX curl helpers
+├── guac/  stackrox/  kind-config.yaml
 └── scripts/
-    ├── 01-bootstrap-cluster.sh           # Create cluster, install Tekton + GUAC + Trustify + ACS + creds
-    ├── 02-run-pipeline.sh                # Launch pipeline (tkn or kubectl)
-    ├── 03-verify.sh                      # Verify image signature post-pipeline
-    ├── 04-cleanup.sh                     # Tear down cluster and keys
-    └── demo.sh                           # Interactive demo walkthrough
+    ├── 01-bootstrap-cluster.sh
+    ├── 02-run-pipeline.sh           # Primary entrypoint for demo runs
+    ├── 03-verify.sh
+    └── 04-cleanup.sh
 ```
 
 ---
@@ -80,165 +65,139 @@ trust-software-supply-chain-poc/
 
 | Tool | Min. version | Install (macOS) |
 |---|---|---|
-| `docker` / `podman` | 24+ | `brew install --cask docker` |
-| `kind` | 0.23+ | `brew install kind` |
-| `kubectl` | 1.28+ | `brew install kubectl` |
-| `helm` | 3.14+ | `brew install helm` |
-| `cosign` | 2.2+ | `brew install cosign` |
-| `tkn` | 0.37+ | `brew install tektoncd-cli` |
+| Docker / Podman | 24+ | `brew install --cask docker` |
+| kind | 0.23+ | `brew install kind` |
+| kubectl | 1.28+ | `brew install kubectl` |
+| helm | 3.14+ | `brew install helm` |
+| cosign | 2.2+ | `brew install cosign` |
+| tkn | 0.37+ | `brew install tektoncd-cli` |
 
-A **Quay.io** account with push access to the target namespace (e.g. `mronconi`) is required. StackRox/ACS Central and Trustify are installed **locally on Kind** by the bootstrap script —  no external instances needed. Create a `.env` file in the project root:
+Quay.io credentials with push access to the target namespace. Create `.env` in the repo root (git-ignored):
 
 ```bash
 QUAY_USERNAME=<your-username>
 QUAY_PASSWORD=<your-token-or-password>
 ```
 
-> **Security note**: `.env` is git-ignored. Never commit credentials.
-
 ---
 
-## Quick Start
-
-### 1. Bootstrap the cluster
+## Bootstrap
 
 ```bash
 git clone https://github.com/mronconis/trust-software-supply-chain-poc.git
 cd trust-software-supply-chain-poc
-
 ./scripts/01-bootstrap-cluster.sh
 ```
 
-This script:
-- Creates a two-node Kind cluster (`tssc`).
-- Installs Tekton Pipelines (images served from `ghcr.io/tektoncd`).
-- Deploys GUAC with an in-memory `keyvalue` backend.
-- Deploys the GUAC Visualizer (dependency graph UI).
-- **Deploys Trustify** (upstream Trusted Profile Analyzer) with PostgreSQL and filesystem storage.
-- **Installs StackRox Central Services** (ACS) on the cluster via Helm.
-- **Generates a StackRox API token** (role: Continuous Integration) automatically.
-- Applies all Tekton Tasks and Pipelines.
-- Generates a **Cosign static keypair** (no passphrase) under `.keys/`.
-- Creates the `cosign-keys`, `quay-registry-secret`, and `stackrox-secret` Kubernetes Secrets.
-- Sets up port-forwards for GUAC Visualizer and Trustify UI.
-
-> **Security note**: `.keys/` is git-ignored. Never commit private keys.
-
-Verify:
+The script creates a Kind cluster (`tssc`), installs Tekton, GUAC, Trustify, and StackRox/ACS, applies Tekton Tasks/Pipeline, generates a Cosign keypair under `.keys/`, creates registry and ACS secrets, and starts port-forwards for GUAC and Trustify.
 
 ```bash
-kubectl get pods -n tekton-pipelines          # controller + webhook Running
-kubectl get pods -n stackrox                  # central, central-db, scanner-v4-* Running
-kubectl get pods -n guac                      # guac-graphql + guac-collectsub + guac-visualizer Running
-kubectl get pods -n trustify                  # trustify-db + trustify-server Running
-kubectl get pipelines -n trusted-supply-chain # trusted-supply-chain
+kubectl get pods -n tekton-pipelines
+kubectl get pods -n stackrox                  # central, scanner-v4-*
+kubectl get pods -n guac
+kubectl get pods -n trustify                  # trustify-db + trustify-server
+kubectl get pipelines -n trusted-supply-chain
 ```
 
-### 2. Access the StackRox Central UI (ACS)
+| Service | URL | Notes |
+|---|---|---|
+| ACS Central | https://localhost:30443 | `admin` / `stackrox` (accept self-signed cert) |
+| Trustify | http://localhost:8084 | Auth disabled in this PoC |
+| GUAC Visualizer | http://localhost:3000 | After SBOM ingest |
+| GUAC GraphQL | http://localhost:8085/query | |
 
-StackRox Central is exposed via NodePort on port **30443**. No port-forward is needed:
-
-```
-https://localhost:30443
-```
-
-| Field | Value |
-|---|---|
-| Username | `admin` |
-| Password | `stackrox` |
-
-> Accept the self-signed certificate warning in your browser.
-
-#### Explore Build-Time Policies
-
-1. Navigate to **Platform Configuration → Policy Management**.
-2. Filter by **Lifecycle Stage → Build** to see only build-time policies evaluated by `roxctl image check`.
-3. Notable policies used by the security gate:
-   - **Log4Shell: CVE-2021-44228** —  **enforced** by the bootstrap script; blocks images with Log4Shell.
-   - **Fixable Severity at least Important** —  inform-only (not enforced); reports fixable high/critical CVEs.
-   - **Fixable CVSS ≥ 7** —  inform-only; reports vulnerabilities above CVSS 7.
-4. Click on any policy to see its criteria, enforcement actions, and exclusions.
-5. Toggle **Enforce on Build** to make a policy blocking (the pipeline's `roxctl image check` will exit non-zero).
-
-#### Manage Policy Exceptions
-
-Central is the single pane of glass for policy management. To create a time-bound exception:
-
-1. Open the policy → **Edit**.
-2. Under **Policy Scope → Excluded Deployments**, add the affected scope.
-3. Or navigate to **Vulnerability Management → Image CVEs** and defer/mark a CVE as a false positive.
-
-### 3. Access the GUAC Visualizer
-
-Open [http://localhost:3000](http://localhost:3000) to explore the dependency graph after an SBOM has been ingested.
-
-The GUAC GraphQL playground is available at [http://localhost:8085/query](http://localhost:8085/query).
-
-### 4. Access the Trustify UI
-
-Open [http://localhost:8084](http://localhost:8084) to explore the Trustify dashboard.
-
-Trustify provides:
-- **SBOM management** —  browse all ingested SBOMs, view package details and dependency trees.
-- **Vulnerability tracking** —  correlate SBOMs with known CVEs and advisories.
-- **VEX / false-positive management** —  ingest CSAF VEX documents (e.g. `known_not_affected`) that the security gate consults before failing a build.
-- **Search** —  search by package name, pURL, or CVE identifier across all ingested data.
-
-> **Note**: Trustify runs with authentication disabled in this PoC. In production, configure Keycloak OIDC via the Trustify Helm chart.
+Bootstrap enables **Enforce on Build** for the ACS policy *Log4Shell: log4j Remote Code Execution vulnerability* (covers `CVE-2021-44228` and `CVE-2021-45046`). Other severity policies remain inform-only.
 
 ---
 
-## Demo Walkthrough
+## Demo walkthrough
 
-The demo script (`scripts/demo.sh`) executes the full use case interactively. It pauses between phases so you can narrate each step to the team.
-
-```bash
-./scripts/demo.sh
-```
-
-> **Prerequisite**: Run `./scripts/01-bootstrap-cluster.sh` first to create the cluster, install all components (Tekton, GUAC, Trustify, StackRox), and set up credentials.
-
-### Phase 1 —  Show the vulnerable dependency
-
-The `pom.xml` ships with a deliberately pinned vulnerable dependency:
+Use `./scripts/02-run-pipeline.sh` for each pipeline run. The application under test pins a vulnerable dependency on purpose:
 
 ```xml
+<!-- quarkus-app/pom.xml -->
 <dependency>
     <groupId>org.apache.logging.log4j</groupId>
     <artifactId>log4j-core</artifactId>
-    <version>2.14.1</version>   <!-- CVE-2021-44228 —  Log4Shell, CVSS 10.0 -->
+    <version>2.14.1</version>   <!-- Log4Shell — CVE-2021-44228 / CVE-2021-45046 -->
 </dependency>
 ```
 
-### Phase 2 —  Pipeline run → FAILURE
+At the start of the demo, Trustify has **no** OSV feed and **no** VEX advisory — only what the pipeline itself uploads (SBOMs).
 
-The pipeline clones source from GitHub, builds the container image, pushes to Quay.io, then:
+### Step 1 — Insecure build (ACS blocks)
 
-1. **SBOM Generation** —  Syft scans the image from Quay.io and produces a CycloneDX 1.4 SBOM.
-2. **GUAC Ingestion** —  The SBOM is ingested into GUAC via `guacone collect files`, populating the dependency graph.
-3. **Trustify Ingestion** —  The same SBOM is uploaded to Trustify via its REST API (`POST /api/v3/sbom`), enabling vulnerability correlation and compliance tracking.
-4. **Security Gate** —  StackRox scans the image (`roxctl image scan`) and evaluates ACS build-time policies (`roxctl image check`):
-   - Enforced policies (e.g. "Log4Shell: CVE-2021-44228") fire.
-   - Trustify has **no** VEX `not_affected` statement yet → **the gate fails**.
-5. **Cosign Sign** —  This stage is **never reached** because the gate exited with a non-zero status.
+```bash
+./scripts/02-run-pipeline.sh \
+  --image quay.io/mronconi/trusted-quarkus-app:insecure \
+  --revision main
+```
 
-Expected output:
+Pipeline stages:
+
+1. Clone → Buildah build → push to Quay.io  
+2. Syft CycloneDX SBOM → ingest into GUAC and Trustify  
+3. Security gate: `roxctl image scan` + `roxctl image check`  
+4. Trustify has no CSAF VEX → Log4Shell violations are **not** waived → **gate fails**  
+5. Cosign is never reached; `:insecure` is **not** signed  
+
+Expected gate snippet:
 
 ```
 ║  STACKROX BUILD-TIME POLICY CHECK                       ║
-║  Image    : quay.io/mronconi/trusted-quarkus-app:vulnerable
-║  Central  : central.stackrox.svc:443
-║  Trustify : http://trustify-server.trustify.svc:8080
-
+║  Image    : quay.io/mronconi/trusted-quarkus-app:insecure
+…
 ║  VEX-AWARE GATE DECISION                                 ║
+  ACS image check exit code : 1
+  VEX waived CVEs           : 0
   Remaining failing policies: 1
 
-❌ SECURITY GATE FAILED — remaining ACS build-time policy violation(s)
+❌ SECURITY GATE FAILED — remaining ACS build-time policy violation(s):
+  • Log4Shell: log4j Remote Code Execution vulnerability …
+``` 
+
+### Step 2 — Import OSV and VEX into Trustify
+
+Trustify must learn about the vulnerability context (OSV) and the SecOps exception (CSAF VEX). Run these against the Trustify API (port-forward on `localhost:8084`). Full helper notes live in [`trustify/README.md`](trustify/README.md).
+
+**GitHub OSV importer** (2021 advisories — includes Log4Shell GHSA):
+
+```bash
+curl -X POST "http://localhost:8084/api/v3/importer/osv-github-2021" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "osv": {
+      "description": "GitHub Advisory Database (2021 only)",
+      "source": "https://github.com/github/advisory-database",
+      "path": "advisories/github-reviewed/2021",
+      "period": "1d",
+      "disabled": false
+    }
+  }'
 ```
 
-### Phase 3 —  Upload VEX → pipeline PASS (false-positive waiver)
+**Optional — Red Hat CSAF importer** (Quarkus / RHEL-oriented feed):
 
-SecOps publishes a CSAF VEX stating CVE-2021-44228 is `known_not_affected` for this deployment (see [`trustify/quarkus-log4j-vex.csaf.json`](trustify/quarkus-log4j-vex.csaf.json)):
+```bash
+curl -X POST "http://localhost:8084/api/v3/importer/redhat-csaf-quarkus" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "csaf": {
+      "description": "Red Hat Quarkus & UBI CSAF Feed",
+      "source": "https://redhat.com/.well-known/csaf/provider-metadata.json",
+      "v3Signatures": true,
+      "disabled": false,
+      "period": "1d",
+      "onlyPatterns": [
+        "quarkus",
+        "rhel-9",
+        "rhsa-2021"
+      ]
+    }
+  }'
+```
+
+**Custom CSAF VEX** — marks Log4Shell as `known_not_affected` for this app’s `log4j-core@2.14.1` (both CVEs ACS enforces):
 
 ```bash
 curl -X POST "http://localhost:8084/api/v3/advisory" \
@@ -246,133 +205,85 @@ curl -X POST "http://localhost:8084/api/v3/advisory" \
   --data-binary @trustify/quarkus-log4j-vex.csaf.json
 ```
 
-Re-running the pipeline on the **same vulnerable code**:
-- StackRox still reports Log4Shell.
-- The gate waives violations that cite CVE-2021-44228 because Trustify marks it `not_affected`.
-- The gate **passes** and Cosign **signs** the image (e.g. `:vex-waived`).
+Document: [`trustify/quarkus-log4j-vex.csaf.json`](trustify/quarkus-log4j-vex.csaf.json) (`DEMO-VEX-QUARKUS-004`).
+
+> The ACS Log4Shell policy fails on **CVE-2021-44228** and **CVE-2021-45046**. The VEX must waive both, or the gate still fails.
+
+Confirm in Trustify UI (Advisories) or:
+
+```bash
+curl -s "http://localhost:8084/api/v3/advisory?q=DEMO-VEX" | jq '.items[].document_id'
+# → DEMO-VEX-QUARKUS-004
+```
+
+### Step 3 — Rebuild (VEX waives false positive → gate passes)
+
+Same source, new tag:
+
+```bash
+./scripts/02-run-pipeline.sh \
+  --image quay.io/mronconi/trusted-quarkus-app:vex-waived \
+  --revision main
+```
+
+Behaviour:
+
+- StackRox **still** reports Log4Shell on `log4j` 2.14.1  
+- Security gate loads CSAF VEX from Trustify (`csaf_vex`)  
+- Violations citing the waived CVEs are dropped  
+- Gate **passes** → Cosign signs `:vex-waived`  
+
+Expected gate snippet:
 
 ```
 ║  TRUSTIFY VEX — not_affected CVE LOOKUP                  ║
-  ✓ Trustify not_affected CVEs (1):
+  ✓ CSAF VEX: DEMO-VEX-QUARKUS-004
+  ✓ Trustify not_affected CVEs (2):
       CVE-2021-44228
+      CVE-2021-45046
+
+║  VEX-AWARE GATE DECISION                                 ║
+  ACS image check exit code : 1
+  VEX waived CVEs           : 2
+  Remaining failing policies: 0
 
 ✅ SECURITY GATE PASSED — ACS violations fully waived by Trustify VEX (not_affected)
 ```
 
-### Phase 4 —  Apply a real fix (optional remediation path)
-
-The developer upgrades `log4j-core` from `2.14.1` to `2.24.3`, commits, and pushes to GitHub:
+Verify signatures:
 
 ```bash
-sed -i 's/2.14.1/2.24.3/' quarkus-app/pom.xml
-git add quarkus-app/pom.xml
-git commit -m "fix: upgrade log4j-core 2.14.1 → 2.24.3 (CVE-2021-44228)"
-git push origin main
-```
-
-### Phase 5 —  Pipeline run on fixed code → SUCCESS
-
-With Log4Shell eliminated from the image:
-- ACS build-time policies are satisfied without needing a VEX waiver.
-- Cosign **signs** `:latest`, attaches the SBOM attestation, and **verifies** the signature.
-
-```
-✅ SECURITY GATE PASSED — all ACS build-time policies satisfied
-```
-
-### Phase 6 —  Verify with cosign
-
-```bash
-# VEX-waived / fixed images —  verification PASSES
+# Signed after VEX waiver
+./scripts/03-verify.sh quay.io/mronconi/trusted-quarkus-app:vex-waived
+# or:
 cosign verify --key .keys/cosign.pub --insecure-ignore-tlog \
   quay.io/mronconi/trusted-quarkus-app:vex-waived
-cosign verify --key .keys/cosign.pub --insecure-ignore-tlog \
-  quay.io/mronconi/trusted-quarkus-app:latest
 
-# First vulnerable run (pre-VEX) —  verification FAILS
+# First insecure run was never signed
 cosign verify --key .keys/cosign.pub --insecure-ignore-tlog \
-  quay.io/mronconi/trusted-quarkus-app:vulnerable
+  quay.io/mronconi/trusted-quarkus-app:insecure
 # → Error: no matching signatures
 ```
 
-**Key takeaway**: Unsigned images never leave the pipeline. False positives are managed as VEX in Trustify; real remediations remove the CVE. Only gate-approved images are signed and deployable.
+**Takeaway:** ACS remains the policy authority for detection and enforcement. Trustify holds SecOps VEX statements. The Tekton gate joins them so documented false positives do not block signing, while unsigned images never leave the pipeline.
 
 ---
 
-## GUAC Dependency Graph
+## Security gate design
 
-After the pipeline ingests an SBOM, the GUAC Visualizer at [http://localhost:3000](http://localhost:3000) renders the full dependency graph of the container image. You can explore:
+Hybrid model:
 
-- **Package nodes** —  every Maven artifact and RPM package in the image.
-- **Dependency edges** —  how components relate to each other.
-- **SBOM metadata** —  which document declared each component.
+1. **`roxctl image scan`** — vulnerability report (table + JSON).  
+2. **`roxctl image check`** — ACS build-time policies → JSON (`violatedPolicies`, `failingCheck`).  
+3. **Trustify VEX lookup** — load CSAF documents with `document.category == csaf_vex` and collect CVEs under `product_status.known_not_affected`.  
+4. **Decision** — drop ACS violation lines that cite a waived CVE (also matches CVE IDs in the policy name/description when messages omit them). Fail only if a `failingCheck` policy still has non-waived violations.
 
-The GUAC GraphQL endpoint also supports programmatic queries:
+Endpoints (defaults):
 
-```bash
-curl http://localhost:8085/query \
-  -H "Content-Type: application/json" \
-  -d '{"query":"{ packages(pkgSpec: {}) { type namespaces { namespace names { name versions { version } } } } }"}'
-```
-
-## Trustify (Trusted Profile Analyzer)
-
-After the pipeline ingests an SBOM, the Trustify UI at [http://localhost:8084](http://localhost:8084) provides:
-
-- **SBOM Dashboard** —  browse all ingested SBOMs with metadata, creation dates, and package counts.
-- **Package Explorer** —  search by package name or pURL to find which SBOMs contain a specific component.
-- **Vulnerability Correlation** —  view known CVEs affecting packages in your SBOMs (when advisory data is loaded).
-- **REST API** —  programmatic access to all data at [http://localhost:8084/openapi/](http://localhost:8084/openapi/).
-
-### Uploading additional SBOMs manually
-
-```bash
-# Upload a single SBOM
-curl -X POST \
-  --data-binary @/path/to/sbom.json \
-  -H "Content-Type: application/json" \
-  http://localhost:8084/api/v3/sbom
-
-# Upload a dataset (zip archive of SBOMs + advisories)
-curl -X POST \
-  --data-binary @dataset.zip \
-  -H "Content-Type: application/zip" \
-  http://localhost:8084/api/v3/dataset
-```
-
-> In production, Trustify is deployed with **Keycloak OIDC** authentication, **S3-compatible** object storage, and the full **Trustify Helm chart** ([trustify-helm-charts](https://github.com/trustification/trustify-helm-charts)). The PoC runs with auth disabled and local filesystem storage for simplicity.
-
----
-
-## Security Gate Design
-
-The gate is **hybrid**: StackRox/ACS remains the scanner and policy engine; Trustify supplies VEX-based exceptions.
-
-1. **Image Scan** —  `roxctl image scan` analyses the container image and produces a vulnerability report (table + JSON).
-2. **Policy Check** —  `roxctl image check` evaluates ACS **build-time** policies and emits JSON (`violatedPolicies`).
-3. **Trustify VEX lookup** —  the task queries Trustify for CVEs with status `not_affected` (analyze SBOM PURLs with `include_resolved=true`, plus advisory/CSAF VEX fallback).
-4. **VEX-aware decision** —  violation messages that cite a waived CVE are dropped. The gate **fails** only if at least one `failingCheck` policy still has non-waived violations; otherwise it **passes** and signing proceeds.
-
-In this PoC, StackRox Central runs **locally on Kind** (`central.stackrox.svc:443`) and Trustify at `http://trustify-server.trustify.svc:8080` (override via `TRUSTIFY_URL`).
-
-- **ACS Central** remains the pane of glass for build-time policy definitions and enforcement toggles.
-- **Trustify** is the pane of glass for product-level false positives via CSAF VEX (`known_not_affected`).
-
-## Product Mapping
-
-| PoC component | Production equivalent (Red Hat) |
+| Component | Address |
 |---|---|
-| Kind cluster | OpenShift (ROSA, ARO, self-managed) |
-| Tekton Pipelines | **Red Hat OpenShift Pipelines** |
-| Cosign with static keys | **Trusted Artifact Signer (TAS)** —  keyless signing via Sigstore Fulcio + Rekor |
-| GUAC (in-memory) | **Trusted Profile Analyzer (TPA)** —  persistent storage, UI, policy engine |
-| Trustify (auth disabled, filesystem) | **Trusted Profile Analyzer (TPA)** —  Keycloak OIDC, S3 storage, Helm deployment |
-| GUAC Visualizer | TPA integrated dashboard |
-| StackRox on Kind (Helm) | **Red Hat Advanced Cluster Security (ACS)** —  managed operator on OpenShift |
-| Quay.io SaaS | **Red Hat Quay** (on-premise or cloud) |
-| CycloneDX SBOM (manual) | Integrated SBOM generation in Trusted Application Pipeline |
-
-In production, the static keypair used here would be replaced by **keyless signing** (OIDC-backed identity via Fulcio), with every signature recorded in an immutable **transparency log** (Rekor). False-positive / not-affected decisions would be managed as signed VEX/CSAF advisories in Trustify (TPA) with a formal exception process and time-bound approvals. Trustify would be deployed with the full Helm chart, Keycloak for OIDC authentication, and S3-compatible storage for durability.
+| ACS Central (in-cluster) | `central.stackrox.svc:443` (`ROX_CENTRAL_ADDRESS`) |
+| Trustify (in-cluster) | `http://trustify-server.trustify.svc:8080` (`TRUSTIFY_URL`) |
 
 ---
 
@@ -382,18 +293,17 @@ In production, the static keypair used here would be replaced by **keyless signi
 ./scripts/04-cleanup.sh
 ```
 
-Deletes the Kind cluster, removes the `.keys/` directory, and kills all port-forward processes.
+Deletes the Kind cluster, `.keys/`, and local port-forwards.
 
 ---
 
 ## References
 
-- [Sigstore](https://www.sigstore.dev/) —  Software signing for everyone
-- [GUAC](https://guac.sh/) —  Graph for Understanding Artifact Composition
-- [Trustify](https://github.com/trustification/trustify) —  Trust management for software supply chains
-- [Trustify Documentation](https://docs.trustification.dev/) —  Administration and deployment guides
-- [Tekton](https://tekton.dev/) —  Cloud-native CI/CD
-- [CycloneDX](https://cyclonedx.org/) —  SBOM standard
+- [Sigstore](https://www.sigstore.dev/)
+- [GUAC](https://guac.sh/)
+- [Trustify](https://github.com/trustification/trustify) · [docs](https://docs.trustification.dev/)
+- [Tekton](https://tekton.dev/)
+- [CycloneDX](https://cyclonedx.org/)
 - [Red Hat Trusted Software Supply Chain](https://www.redhat.com/en/solutions/trusted-software-supply-chain)
 - [Trusted Artifact Signer](https://docs.redhat.com/en/documentation/red_hat_trusted_artifact_signer/)
 - [Trusted Profile Analyzer](https://docs.redhat.com/en/documentation/red_hat_trusted_profile_analyzer/)

@@ -4,16 +4,21 @@
     "csaf_version": "2.0",
     "title": "VEX Statement for Quarkus Demo Application",
     "tracking": {
-      "id": "DEMO-VEX-QUARKUS-003",
-      "current_release_date": "2026-11-03T16:30:00Z",
+      "id": "DEMO-VEX-QUARKUS-004",
+      "current_release_date": "2026-11-03T18:30:00Z",
       "initial_release_date": "2026-11-03T16:30:00Z",
       "status": "final",
-      "version": "1",
+      "version": "2",
       "revision_history": [
         {
           "date": "2026-11-03T16:30:00Z",
           "number": "1",
-          "summary": "Initial release"
+          "summary": "Initial release — CVE-2021-44228"
+        },
+        {
+          "date": "2026-11-03T18:30:00Z",
+          "number": "2",
+          "summary": "Add CVE-2021-45046 (ACS Log4Shell policy covers both CVEs)"
         }
       ]
     },
@@ -53,6 +58,28 @@
   "vulnerabilities": [
     {
       "cve": "CVE-2021-44228",
+      "product_status": {
+        "known_not_affected": [
+          "CSAFPID-LOG4J-2.14.1"
+        ]
+      },
+      "flags": [
+        {
+          "product_ids": [
+            "CSAFPID-LOG4J-2.14.1"
+          ],
+          "label": "vulnerable_code_cannot_be_controlled_by_adversary"
+        }
+      ],
+      "threats": [
+        {
+          "category": "impact",
+          "details": "JNDI lookup mechanism is disabled and unreachable in this deployment."
+        }
+      ]
+    },
+    {
+      "cve": "CVE-2021-45046",
       "product_status": {
         "known_not_affected": [
           "CSAFPID-LOG4J-2.14.1"

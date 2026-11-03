@@ -232,7 +232,7 @@ spec:
 
         echo ""
         echo "╔═══════════════════════════════════════════════════════════╗"
-        echo "║  STACKROX BUILD-TIME POLICY CHECK                       ║"
+        echo "║  STACKROX BUILD-TIME POLICY CHECK                         ║"
         echo "╠═══════════════════════════════════════════════════════════╣"
         echo "║  Image    : $(params.IMAGE)"
         echo "║  Central  : ${ROX_CENTRAL_ADDRESS}"
@@ -266,84 +266,59 @@ spec:
         echo "╚═══════════════════════════════════════════════════════════╝"
 
         if curl -sf "${TRUSTIFY_URL}/" >/dev/null 2>&1 || curl -sf "${TRUSTIFY_URL}/api/v3/advisory?limit=1" >/dev/null 2>&1; then
-          # Primary: analyze SBOM PURLs with include_resolved=true
-          if [ -f "${SBOM_FILE}" ]; then
-            echo "▸ Extracting PURLs from SBOM and querying Trustify analyze..."
-            jq -c '{purls: ([.components[]?.purl // empty] | unique | .[0:200]), include_resolved: true}' \
-              "${SBOM_FILE}" > "${SOURCE}/trustify-analyze-request.json" 2>/dev/null || \
-              echo '{"purls":[],"include_resolved":true}' > "${SOURCE}/trustify-analyze-request.json"
-
-            HTTP_CODE=$(curl -s -o "${SOURCE}/trustify-analyze-response.json" -w "%{http_code}" \
-              -X POST \
-              -H "Content-Type: application/json" \
-              --data-binary @"${SOURCE}/trustify-analyze-request.json" \
-              "${TRUSTIFY_URL}/api/v3/vulnerability/analyze" 2>/dev/null || echo "000")
-
-            if [ "${HTTP_CODE}" = "200" ]; then
-              # Response is a map: purl -> { details: [ { identifier, purl_statuses: [{status}] } ] }
-              jq -r '
-                to_entries[]?.value.details[]? as $d
-                | select(
-                    ($d.purl_statuses // [])
-                    | map(.status // .purl_status.status // empty)
-                    | map(ascii_downcase)
-                    | index("not_affected")
-                  )
-                | ($d.identifier // $d.head.identifier // empty)
-              ' "${SOURCE}/trustify-analyze-response.json" 2>/dev/null \
-                | grep -E '^CVE-[0-9]{4}-[0-9]+$' \
-                | sort -u >> "${VEX_CVES}" || true
-              echo "  ✓ Analyze returned HTTP ${HTTP_CODE}"
-            else
-              echo "  ⚠ Analyze returned HTTP ${HTTP_CODE} — falling back to advisory scan"
+          # Authoritative source: CSAF VEX documents (category=csaf_vex).
+          # These are explicit SecOps false-positive statements and OVERRIDE
+          # OSV/RHSA "affected" statuses from analyze (which often coexist).
+          # Do NOT mine general RHSA known_not_affected product contexts.
+          echo "▸ Loading CSAF VEX advisories from Trustify..."
+          : > "${SOURCE}/trustify-advisories.jsonl"
+          for Q in "csaf_vex" "DEMO-VEX" "VEX"; do
+            curl -sf "${TRUSTIFY_URL}/api/v3/advisory?limit=50&q=${Q}" \
+              >> "${SOURCE}/trustify-advisories-page.json" 2>/dev/null || true
+            if [ -f "${SOURCE}/trustify-advisories-page.json" ]; then
+              jq -c '(.items // [])[]?' "${SOURCE}/trustify-advisories-page.json" 2>/dev/null \
+                >> "${SOURCE}/trustify-advisories.jsonl" || true
+              rm -f "${SOURCE}/trustify-advisories-page.json"
             fi
-          else
-            echo "  ⚠ SBOM not found at ${SBOM_FILE} — skipping analyze"
+          done
+          # Also take most recently ingested advisories (VEX uploads land here)
+          curl -sf "${TRUSTIFY_URL}/api/v3/advisory?limit=20&sort=ingested%3Adesc" \
+            -o "${SOURCE}/trustify-advisories-page.json" 2>/dev/null || true
+          if [ -f "${SOURCE}/trustify-advisories-page.json" ]; then
+            jq -c '(.items // [])[]?' "${SOURCE}/trustify-advisories-page.json" 2>/dev/null \
+              >> "${SOURCE}/trustify-advisories.jsonl" || true
+            rm -f "${SOURCE}/trustify-advisories-page.json"
           fi
 
-          # Fallback / supplement: scan advisories for CSAF VEX known_not_affected
-          echo "▸ Scanning Trustify advisories for VEX known_not_affected..."
-          curl -sf "${TRUSTIFY_URL}/api/v3/advisory?limit=100" \
-            -o "${SOURCE}/trustify-advisories.json" 2>/dev/null || true
-
-          if [ -f "${SOURCE}/trustify-advisories.json" ]; then
-            # Try common paginated shapes for advisory identifiers / UUIDs
-            ADVISORY_IDS=$(jq -r '
-              (.items // .data // .)
-              | if type == "array" then .[] else empty end
-              | (.uuid // .id // .identifier // empty)
-            ' "${SOURCE}/trustify-advisories.json" 2>/dev/null || true)
+          if [ -s "${SOURCE}/trustify-advisories.jsonl" ]; then
+            ADVISORY_IDS=$(jq -r -s '
+              [.[].uuid // empty] | unique | .[]
+            ' "${SOURCE}/trustify-advisories.jsonl" 2>/dev/null || true)
 
             for ADV_ID in ${ADVISORY_IDS}; do
               [ -z "${ADV_ID}" ] && continue
-              # Download raw advisory document when available
               ADV_FILE="${SOURCE}/adv-$(echo "${ADV_ID}" | tr '/:' '__').json"
+              # Prefer /download; keep urn:uuid: form (bare UUID returns 404)
               if curl -sf "${TRUSTIFY_URL}/api/v3/advisory/${ADV_ID}/download" \
                    -o "${ADV_FILE}" 2>/dev/null \
                  || curl -sf "${TRUSTIFY_URL}/api/v3/advisory/${ADV_ID}" \
                    -o "${ADV_FILE}" 2>/dev/null; then
-                # CSAF VEX: vulnerabilities with known_not_affected product_status
+                CATEGORY=$(jq -r '.document.category // empty' "${ADV_FILE}" 2>/dev/null || true)
+                if [ "${CATEGORY}" != "csaf_vex" ]; then
+                  continue
+                fi
+                echo "  ✓ CSAF VEX: $(jq -r '.document.tracking.id // .document.title // "unknown"' "${ADV_FILE}" 2>/dev/null)"
                 jq -r '
-                  (.. | objects | select(has("vulnerabilities")) | .vulnerabilities[]?) as $v
-                  | select(
-                      ($v.product_status.known_not_affected // [])
-                      | length > 0
-                    )
-                  | ($v.cve // empty)
-                ' "${ADV_FILE}" 2>/dev/null \
-                  | grep -E '^CVE-[0-9]{4}-[0-9]+$' \
-                  | sort -u >> "${VEX_CVES}" || true
-
-                # Also accept Trustify API summary shapes exposing status
-                jq -r '
-                  (.. | objects | select(has("status")) | .) as $s
-                  | select((($s.status // "") | ascii_downcase) == "not_affected")
-                  | ($s.vulnerability // $s.identifier // $s.cve // empty)
+                  (.vulnerabilities // [])[]?
+                  | select((.product_status.known_not_affected // []) | length > 0)
+                  | (.cve // empty)
                 ' "${ADV_FILE}" 2>/dev/null \
                   | grep -E '^CVE-[0-9]{4}-[0-9]+$' \
                   | sort -u >> "${VEX_CVES}" || true
               fi
             done
+          else
+            echo "  ▸ No candidate advisories returned for VEX queries"
           fi
 
           sort -u "${VEX_CVES}" -o "${VEX_CVES}"

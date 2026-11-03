@@ -76,7 +76,7 @@
         <!--
           VULNERABLE DEPENDENCY — deliberately pinned for supply-chain demo.
           Log4Shell (CVE-2021-44228): CVSS 10.0 CRITICAL
-          Fix: upgrade to 2.24.3+   (see scripts/demo.sh)
+          Fix: upgrade to 2.24.3+   (upgrade to 2.24.3+ for a real remediation)
         -->
         <dependency>
             <groupId>org.apache.logging.log4j</groupId>
