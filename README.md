@@ -1,14 +1,18 @@
 # Trusted Software Supply Chain — Proof of Concept
 
-End-to-end demo of a trusted software supply chain using the upstream projects behind the Red Hat Trusted Software Supply Chain portfolio. The pipeline builds a Quarkus image, generates an SBOM, collects ACS + Trustify evidence, and signs the artefact with Cosign — only if a **Conforma CVE/VEX policy** allows it.
+An end-to-end reference implementation of a Trusted Software Supply Chain (TSSC) pipeline leveraging the upstream projects powering the Red Hat Trusted Software Supply Chain stack. The workflow automates the build of a Quarkus container image, generates a standardized Software Bill of Materials (SBOM), and correlates vulnerability and exploitability telemetry across Red Hat Advanced Cluster Security (ACS) and Trustify. Cryptographic signing and attestation via Sigstore Cosign are enforced via an automated policy-as-code gate, proceeding only upon successful validation against Conforma CVE/VEX policies.
+
+> **Disclaimer:** This repository is strictly an experimental Proof of Concept (PoC) for architectural evaluation and technical demonstration. It is **not** intended, hardened, or supported for production environments or production reference deployments.
+
+> **Illustrative VEX:** The app still ships `log4j-core` 2.14.1 so ACS can surface CVE-2021-44228 / CVE-2021-45046. [`quarkus-app/Dockerfile`](quarkus-app/Dockerfile) applies a **demo mitigation** (strip `JndiLookup.class` + `-Dlog4j2.formatMsgNoLookups=true`). The SecOps CSAF VEX (`known_not_affected`) documents that mitigation for the Conforma gate only — **not** a production risk acceptance. Do not reuse this VEX or Dockerfile workaround; upgrade Log4j in real systems.
 
 ---
 
 ## What this PoC shows
 
-1. **Gate blocks** a build that ships Log4Shell (`log4j-core` 2.14.1): ACS reports CRITICAL CVEs and Trustify has no VEX waiver yet.
-2. **SecOps imports** vulnerability intelligence (OSV) and a CSAF VEX that marks those CVEs as `known_not_affected`.
-3. **The same insecure code passes**: ACS still reports the findings; Trustify VEX waives them; Conforma evaluates the evidence bundle and passes; waivers are **mirrored into ACS** as approved false-positive exceptions; Cosign signs the image.
+1. **Gate blocks** a build that ships Log4Shell (`log4j-core` 2.14.1): ACS reports CRITICAL CVEs and Trustify has no VEX yet.
+2. **SecOps publishes an illustrative CSAF VEX** tied to the Dockerfile mitigation, marking those CVEs `known_not_affected` in Trustify (optional OSV feed).
+3. **Rebuild**: ACS still reports the CVEs; Trustify VEX waives them; Conforma passes; waivers sync to ACS as approved FPs; Cosign signs the image.
 
 ```
 ┌──────────┐    ┌──────────┐    ┌───────────────────┐    ┌──────────────────────┐    ┌────────────┐
@@ -160,6 +164,8 @@ Use `./scripts/02-run-pipeline.sh` for each run. The sample app pins a vulnerabl
 </dependency>
 ```
 
+[`quarkus-app/Dockerfile`](quarkus-app/Dockerfile) keeps that JAR for scanner visibility, then strips `JndiLookup` and sets `log4j2.formatMsgNoLookups=true`. The demo VEX asserts that mitigation — **illustratively only**; it is not a Maven upgrade.
+
 At demo start, Trustify has **no** OSV feed and **no** VEX — only SBOMs uploaded by the pipeline itself.
 
 ### Step 1 — Insecure build (gate blocks)
@@ -192,9 +198,9 @@ Expected gate snippet:
 ❌ CONFORMA GATE FAILED — unwaived CRITICAL CVE(s)
 ```
 
-### Step 2 — Import OSV and VEX into Trustify
+### Step 2 — Import OSV and illustrative VEX into Trustify
 
-Load vulnerability context (OSV) and the SecOps exception (CSAF VEX). Helpers also in [`trustify/README.md`](trustify/README.md).
+Load OSV context and the SecOps CSAF VEX that records the Dockerfile Log4Shell mitigation as `known_not_affected` (demo only). Helpers: [`trustify/README.md`](trustify/README.md).
 
 **GitHub OSV importer** (2021 advisories — includes Log4Shell):
 
@@ -212,7 +218,7 @@ curl -X POST "http://localhost:8084/api/v3/importer/osv-github-2021" \
   }'
 ```
 
-**Custom CSAF VEX** — `known_not_affected` for both Log4Shell CVEs on `log4j-core@2.14.1`:
+**Illustrative CSAF VEX** — `known_not_affected` for CVE-2021-44228 / CVE-2021-45046 on `log4j-core@2.14.1`, justified by the Dockerfile mitigation (not a dependency bump):
 
 ```bash
 curl -X POST "http://localhost:8084/api/v3/advisory" \
@@ -222,7 +228,7 @@ curl -X POST "http://localhost:8084/api/v3/advisory" \
 
 Document: [`trustify/quarkus-log4j-vex.csaf.json`](trustify/quarkus-log4j-vex.csaf.json) (`DEMO-VEX-QUARKUS-004`).
 
-### Step 3 — Rebuild (VEX waives false positives → gate passes)
+### Step 3 — Rebuild (illustrative VEX → gate passes)
 
 ```bash
 ./scripts/02-run-pipeline.sh \
@@ -270,7 +276,7 @@ cosign verify --key .keys/cosign.pub --insecure-ignore-tlog \
 # → Error: no matching signatures
 ```
 
-**Takeaway:** ACS provides visibility and a synchronized FP view. Trustify holds SecOps VEX (source of truth). Conforma is the only blocking policy engine over the assembled evidence.
+**Takeaway:** ACS = visibility + FP UI sync. Trustify = SoT for the *demo* exploitability statement (Dockerfile mitigation). Conforma = blocking policy engine. Production fix = upgrade Log4j, not waive via container hacks.
 
 ---
 
@@ -294,31 +300,6 @@ Defaults:
 | Trustify (VEX) | `http://trustify-server.trustify.svc:8080` (`TRUSTIFY_URL`) |
 
 ACS build-time `image check` is **not** used for pass/fail.
-
----
-
-## Pipeline helpers
-
-```bash
-./scripts/02-run-pipeline.sh \
-  --image quay.io/mronconi/trusted-quarkus-app:my-tag \
-  --revision main \
-  --rox-central central.stackrox.svc:443
-
-./scripts/02-run-pipeline.sh --help
-```
-
----
-
-## GUAC (optional)
-
-After SBOM ingest: [http://localhost:3000](http://localhost:3000).
-
-```bash
-curl http://localhost:8085/query \
-  -H "Content-Type: application/json" \
-  -d '{"query":"{ packages(pkgSpec: {}) { type namespaces { namespace names { name versions { version } } } } }"}'
-```
 
 ---
 
