@@ -37,7 +37,7 @@ An end-to-end reference implementation of a Trusted Software Supply Chain (TSSC)
 | Tekton Pipelines | OpenShift Pipelines | CI/CD engine |
 | Sigstore / Cosign | Trusted Artifact Signer (TAS) | Image signing |
 | GUAC | Trusted Profile Analyzer (TPA) | Dependency graph |
-| Trustify | Trusted Profile Analyzer (TPA) | SBOM store, advisories, **VEX SoT** |
+| Trustify | Trusted Profile Analyzer (TPA) | SBOM store, advisories, **VEX Single Source of Truth (SSOT)** |
 | Conforma (`ec`) | Conforma / Enterprise Contract | **CVE gate policy engine** |
 | StackRox / roxctl | Advanced Cluster Security (ACS) | Informational scan + FP UI sync |
 | Syft + CycloneDX | — | SBOM generation |
@@ -276,7 +276,7 @@ cosign verify --key .keys/cosign.pub --insecure-ignore-tlog \
 # → Error: no matching signatures
 ```
 
-**Takeaway:** ACS = visibility + FP UI sync. Trustify = SoT for the *demo* exploitability statement (Dockerfile mitigation). Conforma = blocking policy engine. Production fix = upgrade Log4j, not waive via container hacks.
+**Takeaway:** ACS = visibility + FP UI sync. Trustify = **Single Source of Truth (SSOT)** for VEX / exploitability (here: Dockerfile mitigation, demo only). Conforma = blocking policy engine. Production fix = upgrade Log4j, not waive via container hacks.
 
 ---
 
@@ -290,7 +290,7 @@ cosign verify --key .keys/cosign.pub --insecure-ignore-tlog \
 | Decide | Conforma `ec validate input` + Rego `policy.unwaived_critical` | **Yes** |
 | ACS sync | `gate/sync_acs_fp.py` | No — exact image tag, idempotent |
 
-**Authority model:** Trustify VEX is the source of truth for waivers. Conforma evaluates `CRITICAL ∖ known_not_affected`. ACS receives a one-way FP sync for UI consistency. An FP created only in ACS does **not** make the Tekton gate pass.
+**Authority model:** Trustify is the **Single Source of Truth (SSOT)** for VEX waivers. Conforma evaluates `CRITICAL ∖ known_not_affected` from that SSOT. ACS receives a one-way FP sync for UI consistency. An FP created only in ACS does **not** make the Tekton gate pass.
 
 Defaults:
 

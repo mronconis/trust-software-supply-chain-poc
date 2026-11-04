@@ -1,6 +1,6 @@
 # Trustify — importers and VEX (PoC)
 
-Helpers for demo Step 2 in the root [`README.md`](../README.md): load vulnerability intelligence and upload the CSAF VEX used as the **source of truth** for the Conforma CVE gate.
+Helpers for demo Step 2 in the root [`README.md`](../README.md): load vulnerability intelligence and upload the CSAF VEX. Trustify is the **Single Source of Truth (SSOT)** for VEX / exploitability used by the Conforma CVE gate.
 
 Trustify UI / API: [http://localhost:8084](http://localhost:8084) · OpenAPI at `/openapi/`.
 
@@ -15,7 +15,7 @@ Trustify UI / API: [http://localhost:8084](http://localhost:8084) · OpenAPI at 
 Demo VEX: [`quarkus-log4j-vex.csaf.json`](quarkus-log4j-vex.csaf.json)  
 → `CVE-2021-44228` and `CVE-2021-45046` as `known_not_affected` for `pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1`.
 
-Both CRITICAL CVEs from the ACS scan must be waived or Conforma fails. Trustify remains the source of truth; ACS Exception Management is updated to match the VEX.
+Both CRITICAL CVEs from the ACS scan must be waived or Conforma fails. Trustify remains the VEX **SSOT**; ACS Exception Management is updated to match that VEX (one-way sync).
 
 ## GitHub OSV importer
 
