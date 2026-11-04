@@ -1,28 +1,31 @@
 # Trusted Software Supply Chain — Proof of Concept
 
-End-to-end demo of a trusted software supply chain using the upstream projects behind the Red Hat Trusted Software Supply Chain portfolio. The pipeline builds a Quarkus image, generates an SBOM, evaluates ACS build-time policies, and signs the artefact with Cosign — only if a VEX-aware security gate allows it.
+End-to-end demo of a trusted software supply chain using the upstream projects behind the Red Hat Trusted Software Supply Chain portfolio. The pipeline builds a Quarkus image, generates an SBOM, collects ACS + Trustify evidence, and signs the artefact with Cosign — only if a **Conforma CVE/VEX policy** allows it.
 
 ---
 
 ## What this PoC shows
 
-1. **ACS blocks** a build that ships Log4Shell (`log4j-core` 2.14.1) when Trustify has no VEX exception.
-2. **SecOps imports** vulnerability intelligence (OSV) and a CSAF VEX that marks the finding as `known_not_affected`.
-3. **The same insecure code passes** the gate: StackRox still reports the CVE; Trustify VEX waives it as a documented false positive; Cosign signs the image.
+1. **Gate blocks** a build that ships Log4Shell (`log4j-core` 2.14.1): ACS reports CRITICAL CVEs and Trustify has no VEX waiver yet.
+2. **SecOps imports** vulnerability intelligence (OSV) and a CSAF VEX that marks those CVEs as `known_not_affected`.
+3. **The same insecure code passes**: ACS still reports the findings; Trustify VEX waives them; Conforma evaluates the evidence bundle and passes; waivers are **mirrored into ACS** as approved false-positive exceptions; Cosign signs the image.
 
 ```
-┌──────────┐    ┌──────────┐    ┌───────────────────┐    ┌─────────────────────┐    ┌────────────┐
-│  Source  │───▸│  Build   │───▸│ SBOM + GUAC       │───▸│ Security Gate       │───▸│ Sign       │
-│ (GitHub) │    │(Buildah) │    │       + Trustify  │    │ StackRox + VEX      │    │ (Cosign)   │
-└──────────┘    └──────────┘    └───────────────────┘    └──────────┬──────────┘    └────────────┘
-                                   │             │                   │
-                                   ▼             ▼            Remaining ACS
-                               GUAC          Trustify         violation after
-                           (dep graph)    (SBOM + VEX)         VEX filter?
-                                                              ╱         ╲
-                                                            YES          NO
-                                                             ↓            ↓
-                                                       ❌ HALTED    ✅ SIGNED
+┌──────────┐    ┌──────────┐    ┌───────────────────┐    ┌──────────────────────┐    ┌────────────┐
+│  Source  │───▸│  Build   │───▸│ SBOM + GUAC       │───▸│ Collect evidence     │───▸│ Sign       │
+│ (GitHub) │    │(Buildah) │    │       + Trustify  │    │ ACS scan + Trustify  │    │ (Cosign)   │
+└──────────┘    └──────────┘    └───────────────────┘    │ VEX → evidence.json  │    └────────────┘
+                                   │             │       └──────────┬───────────┘
+                                   ▼             ▼                  │
+                               GUAC          Trustify               ▼
+                           (dep graph)    (SBOM + VEX)    ┌──────────────────────┐
+                                                          │ Conforma             │
+                                                          │ ec validate input    │
+                                                          └──────────┬───────────┘
+                                                                  ╱           ╲
+                                                                FAIL          PASS
+                                                                 ↓              ↓
+                                                           ❌ HALTED   ACS FP sync → ✅ SIGNED
 ```
 
 | Upstream | Red Hat product | Role in this PoC |
@@ -30,8 +33,9 @@ End-to-end demo of a trusted software supply chain using the upstream projects b
 | Tekton Pipelines | OpenShift Pipelines | CI/CD engine |
 | Sigstore / Cosign | Trusted Artifact Signer (TAS) | Image signing |
 | GUAC | Trusted Profile Analyzer (TPA) | Dependency graph |
-| Trustify | Trusted Profile Analyzer (TPA) | SBOM store, advisories, VEX |
-| StackRox / roxctl | Advanced Cluster Security (ACS) | Image scan + build policies |
+| Trustify | Trusted Profile Analyzer (TPA) | SBOM store, advisories, **VEX SoT** |
+| Conforma (`ec`) | Conforma / Enterprise Contract | **CVE gate policy engine** |
+| StackRox / roxctl | Advanced Cluster Security (ACS) | Informational scan + FP UI sync |
 | Syft + CycloneDX | — | SBOM generation |
 
 ---
@@ -40,21 +44,34 @@ End-to-end demo of a trusted software supply chain using the upstream projects b
 
 ```
 ├── quarkus-app/                     # Sample Quarkus app (deliberately vulnerable log4j)
+├── gate/                            # Evidence collectors + ACS FP sync (Python, tested)
+│   ├── collect_acs.py
+│   ├── collect_trustify.py
+│   ├── assemble_evidence.py
+│   ├── sync_acs_fp.py
+│   ├── schema/evidence.schema.json
+│   └── tests/
+├── conforma/                        # Conforma policy (Rego) + offline fixtures
+│   ├── policy.yaml
+│   ├── policy/critical_vex.rego
+│   └── testdata/
 ├── tekton/
 │   ├── tasks/
 │   │   ├── build-and-push.yaml
-│   │   ├── generate-sbom.yaml       # Syft → GUAC + Trustify ingest
-│   │   ├── security-gate.yaml       # StackRox check + Trustify VEX filter
+│   │   ├── generate-sbom.yaml
+│   │   ├── collect-security-evidence.yaml
+│   │   ├── conforma-cve-gate.yaml
+│   │   ├── sync-acs-false-positives.yaml
 │   │   └── sign-and-attest.yaml
 │   └── pipelines/trusted-supply-chain.yaml
 ├── trustify/
-│   ├── trustify-deployment.yaml
 │   ├── quarkus-log4j-vex.csaf.json  # Demo CSAF VEX (Log4Shell not_affected)
-│   └── README.md                    # Importer / VEX curl helpers
+│   └── README.md
 ├── guac/  stackrox/  kind-config.yaml
 └── scripts/
     ├── 01-bootstrap-cluster.sh
-    ├── 02-run-pipeline.sh           # Primary entrypoint for demo runs
+    ├── apply-conforma-gate.sh       # ConfigMaps + gate Tasks/Pipeline
+    ├── 02-run-pipeline.sh
     ├── 03-verify.sh
     └── 04-cleanup.sh
 ```
@@ -72,7 +89,7 @@ End-to-end demo of a trusted software supply chain using the upstream projects b
 | cosign | 2.2+ | `brew install cosign` |
 | tkn | 0.37+ | `brew install tektoncd-cli` |
 
-Quay.io credentials with push access to the target namespace. Create `.env` in the repo root (git-ignored):
+Quay.io credentials with push access. Create `.env` in the repo root (git-ignored):
 
 ```bash
 QUAY_USERNAME=<your-username>
@@ -89,14 +106,12 @@ cd trust-software-supply-chain-poc
 ./scripts/01-bootstrap-cluster.sh
 ```
 
-The script creates a Kind cluster (`tssc`), installs Tekton, GUAC, Trustify, and StackRox/ACS, applies Tekton Tasks/Pipeline, generates a Cosign keypair under `.keys/`, creates registry and ACS secrets, and starts port-forwards for GUAC and Trustify.
+Creates Kind cluster `tssc`, installs Tekton, GUAC, Trustify, and StackRox/ACS, applies Tasks/Pipeline (including Conforma gate ConfigMaps), generates Cosign keys under `.keys/`, creates secrets, and starts port-forwards.
+
+Re-apply only the gate after local edits:
 
 ```bash
-kubectl get pods -n tekton-pipelines
-kubectl get pods -n stackrox                  # central, scanner-v4-*
-kubectl get pods -n guac
-kubectl get pods -n trustify                  # trustify-db + trustify-server
-kubectl get pipelines -n trusted-supply-chain
+./scripts/apply-conforma-gate.sh
 ```
 
 | Service | URL | Notes |
@@ -106,13 +121,35 @@ kubectl get pipelines -n trusted-supply-chain
 | GUAC Visualizer | http://localhost:3000 | After SBOM ingest |
 | GUAC GraphQL | http://localhost:8085/query | |
 
-Bootstrap enables **Enforce on Build** for the ACS policy *Log4Shell: log4j Remote Code Execution vulnerability* (covers `CVE-2021-44228` and `CVE-2021-45046`). Other severity policies remain inform-only.
+---
+
+## Offline policy checks (no cluster)
+
+```bash
+# Collector unit tests
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r gate/requirements-dev.txt
+pytest gate/tests -q
+
+# Rego unit tests
+docker run --rm -v "$PWD/conforma/policy:/policy:ro" openpolicyagent/opa:latest test /policy -v
+
+# Conforma against fixtures
+docker run --rm -v "$PWD/conforma:/conforma:ro" -w /conforma \
+  quay.io/conforma/cli:latest \
+  validate input testdata/evidence-pass.json --policy policy.yaml --info
+
+docker run --rm -v "$PWD/conforma:/conforma:ro" -w /conforma \
+  quay.io/conforma/cli:latest \
+  validate input testdata/evidence-fail.json --policy policy.yaml --info
+# → exit 1, policy.unwaived_critical for both Log4Shell CVEs
+```
 
 ---
 
 ## Demo walkthrough
 
-Use `./scripts/02-run-pipeline.sh` for each pipeline run. The application under test pins a vulnerable dependency on purpose:
+Use `./scripts/02-run-pipeline.sh` for each run. The sample app pins a vulnerable dependency:
 
 ```xml
 <!-- quarkus-app/pom.xml -->
@@ -123,9 +160,9 @@ Use `./scripts/02-run-pipeline.sh` for each pipeline run. The application under 
 </dependency>
 ```
 
-At the start of the demo, Trustify has **no** OSV feed and **no** VEX advisory — only what the pipeline itself uploads (SBOMs).
+At demo start, Trustify has **no** OSV feed and **no** VEX — only SBOMs uploaded by the pipeline itself.
 
-### Step 1 — Insecure build (ACS blocks)
+### Step 1 — Insecure build (gate blocks)
 
 ```bash
 ./scripts/02-run-pipeline.sh \
@@ -133,34 +170,33 @@ At the start of the demo, Trustify has **no** OSV feed and **no** VEX advisory �
   --revision main
 ```
 
-Pipeline stages:
+What happens:
 
-1. Clone → Buildah build → push to Quay.io  
-2. Syft CycloneDX SBOM → ingest into GUAC and Trustify  
-3. Security gate: `roxctl image scan` + `roxctl image check`  
-4. Trustify has no CSAF VEX → Log4Shell violations are **not** waived → **gate fails**  
-5. Cosign is never reached; `:insecure` is **not** signed  
+1. Clone → Buildah → push to Quay.io  
+2. Syft SBOM → GUAC + Trustify  
+3. **collect-security-evidence**: ACS scan (info) + Trustify VEX → `evidence.json`  
+4. **conforma-cve-gate**: `ec validate input` — no VEX → **FAIL**  
+5. Cosign is skipped; `:insecure` is **not** signed  
 
 Expected gate snippet:
 
 ```
-║  STACKROX BUILD-TIME POLICY CHECK                       ║
-║  Image    : quay.io/mronconi/trusted-quarkus-app:insecure
-…
-║  VEX-AWARE GATE DECISION                                 ║
-  ACS image check exit code : 1
-  VEX waived CVEs           : 0
-  Remaining failing policies: 1
+║  STACKROX VULNERABILITY SCAN (informational)             ║
+… CVE-2021-44228 … CRITICAL …
+… CVE-2021-45046 … CRITICAL …
 
-❌ SECURITY GATE FAILED — remaining ACS build-time policy violation(s):
-  • Log4Shell: log4j Remote Code Execution vulnerability …
-``` 
+║  CONFORMA CVE GATE (ec validate input)                   ║
+✕ [Violation] policy.unwaived_critical
+  Reason: CRITICAL CVE CVE-2021-44228 has no Trustify VEX …
+
+❌ CONFORMA GATE FAILED — unwaived CRITICAL CVE(s)
+```
 
 ### Step 2 — Import OSV and VEX into Trustify
 
-Trustify must learn about the vulnerability context (OSV) and the SecOps exception (CSAF VEX). Run these against the Trustify API (port-forward on `localhost:8084`). Full helper notes live in [`trustify/README.md`](trustify/README.md).
+Load vulnerability context (OSV) and the SecOps exception (CSAF VEX). Helpers also in [`trustify/README.md`](trustify/README.md).
 
-**GitHub OSV importer** (2021 advisories — includes Log4Shell GHSA):
+**GitHub OSV importer** (2021 advisories — includes Log4Shell):
 
 ```bash
 curl -X POST "http://localhost:8084/api/v3/importer/osv-github-2021" \
@@ -176,28 +212,7 @@ curl -X POST "http://localhost:8084/api/v3/importer/osv-github-2021" \
   }'
 ```
 
-**Optional — Red Hat CSAF importer** (Quarkus / RHEL-oriented feed):
-
-```bash
-curl -X POST "http://localhost:8084/api/v3/importer/redhat-csaf-quarkus" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "csaf": {
-      "description": "Red Hat Quarkus & UBI CSAF Feed",
-      "source": "https://redhat.com/.well-known/csaf/provider-metadata.json",
-      "v3Signatures": true,
-      "disabled": false,
-      "period": "1d",
-      "onlyPatterns": [
-        "quarkus",
-        "rhel-9",
-        "rhsa-2021"
-      ]
-    }
-  }'
-```
-
-**Custom CSAF VEX** — marks Log4Shell as `known_not_affected` for this app’s `log4j-core@2.14.1` (both CVEs ACS enforces):
+**Custom CSAF VEX** — `known_not_affected` for both Log4Shell CVEs on `log4j-core@2.14.1`:
 
 ```bash
 curl -X POST "http://localhost:8084/api/v3/advisory" \
@@ -207,18 +222,7 @@ curl -X POST "http://localhost:8084/api/v3/advisory" \
 
 Document: [`trustify/quarkus-log4j-vex.csaf.json`](trustify/quarkus-log4j-vex.csaf.json) (`DEMO-VEX-QUARKUS-004`).
 
-> The ACS Log4Shell policy fails on **CVE-2021-44228** and **CVE-2021-45046**. The VEX must waive both, or the gate still fails.
-
-Confirm in Trustify UI (Advisories) or:
-
-```bash
-curl -s "http://localhost:8084/api/v3/advisory?q=DEMO-VEX" | jq '.items[].document_id'
-# → DEMO-VEX-QUARKUS-004
-```
-
-### Step 3 — Rebuild (VEX waives false positive → gate passes)
-
-Same source, new tag:
+### Step 3 — Rebuild (VEX waives false positives → gate passes)
 
 ```bash
 ./scripts/02-run-pipeline.sh \
@@ -226,64 +230,109 @@ Same source, new tag:
   --revision main
 ```
 
-Behaviour:
-
-- StackRox **still** reports Log4Shell on `log4j` 2.14.1  
-- Security gate loads CSAF VEX from Trustify (`csaf_vex`)  
-- Violations citing the waived CVEs are dropped  
-- Gate **passes** → Cosign signs `:vex-waived`  
-
-Expected gate snippet:
+- ACS **still** reports Log4Shell in the scan step  
+- Collectors build `evidence.json` with both CVEs under `vex.known_not_affected`  
+- Conforma **passes**  
+- `sync-acs-false-positives` creates/approves an image-tag-scoped ACS FP  
+- Cosign signs `:vex-waived`  
 
 ```
-║  TRUSTIFY VEX — not_affected CVE LOOKUP                  ║
-  ✓ CSAF VEX: DEMO-VEX-QUARKUS-004
-  ✓ Trustify not_affected CVEs (2):
-      CVE-2021-44228
-      CVE-2021-45046
+║  CONFORMA CVE GATE (ec validate input)                   ║
+✅ CONFORMA GATE PASSED
 
-║  VEX-AWARE GATE DECISION                                 ║
-  ACS image check exit code : 1
-  VEX waived CVEs           : 2
-  Remaining failing policies: 0
-
-✅ SECURITY GATE PASSED — ACS violations fully waived by Trustify VEX (not_affected)
+║  ACS FALSE-POSITIVE SYNC (from Trustify VEX)             ║
+Approved exception — 2 CVE(s) marked false positive in ACS
 ```
 
-Verify signatures:
+In ACS Central → **Vulnerability Management → Exception Management** you should see the approved exception for `quay.io/mronconi/trusted-quarkus-app:vex-waived` (exact tag — not `.*`).
 
 ```bash
-# Signed after VEX waiver
+TOKEN=$(kubectl get secret stackrox-secret -n trusted-supply-chain \
+  -o jsonpath='{.data.rox-api-token}' | base64 -d)
+curl -sk "https://localhost:30443/v2/vulnerability-exceptions?pagination.limit=50" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  | jq -r '.exceptions[]?
+      | select(.status=="APPROVED")
+      | select(.scope.imageScope.tag=="vex-waived")
+      | [.id, (.cves|join(",")), .scope.imageScope.tag] | @tsv'
+```
+
+Verify:
+
+```bash
 ./scripts/03-verify.sh quay.io/mronconi/trusted-quarkus-app:vex-waived
-# or:
+
 cosign verify --key .keys/cosign.pub --insecure-ignore-tlog \
   quay.io/mronconi/trusted-quarkus-app:vex-waived
 
-# First insecure run was never signed
 cosign verify --key .keys/cosign.pub --insecure-ignore-tlog \
   quay.io/mronconi/trusted-quarkus-app:insecure
 # → Error: no matching signatures
 ```
 
-**Takeaway:** ACS remains the policy authority for detection and enforcement. Trustify holds SecOps VEX statements. The Tekton gate joins them so documented false positives do not block signing, while unsigned images never leave the pipeline.
+**Takeaway:** ACS provides visibility and a synchronized FP view. Trustify holds SecOps VEX (source of truth). Conforma is the only blocking policy engine over the assembled evidence.
 
 ---
 
 ## Security gate design
 
-Hybrid model:
+| Step | Tool | Blocking? |
+|---|---|---|
+| Collect ACS | `roxctl image scan` + `gate/collect_acs.py` | No — inventory only |
+| Collect VEX | Trustify API + `gate/collect_trustify.py` | No — waiver inventory |
+| Assemble | `gate/assemble_evidence.py` → `evidence.json` | No |
+| Decide | Conforma `ec validate input` + Rego `policy.unwaived_critical` | **Yes** |
+| ACS sync | `gate/sync_acs_fp.py` | No — exact image tag, idempotent |
 
-1. **`roxctl image scan`** — vulnerability report (table + JSON).  
-2. **`roxctl image check`** — ACS build-time policies → JSON (`violatedPolicies`, `failingCheck`).  
-3. **Trustify VEX lookup** — load CSAF documents with `document.category == csaf_vex` and collect CVEs under `product_status.known_not_affected`.  
-4. **Decision** — drop ACS violation lines that cite a waived CVE (also matches CVE IDs in the policy name/description when messages omit them). Fail only if a `failingCheck` policy still has non-waived violations.
+**Authority model:** Trustify VEX is the source of truth for waivers. Conforma evaluates `CRITICAL ∖ known_not_affected`. ACS receives a one-way FP sync for UI consistency. An FP created only in ACS does **not** make the Tekton gate pass.
 
-Endpoints (defaults):
+Defaults:
 
 | Component | Address |
 |---|---|
-| ACS Central (in-cluster) | `central.stackrox.svc:443` (`ROX_CENTRAL_ADDRESS`) |
-| Trustify (in-cluster) | `http://trustify-server.trustify.svc:8080` (`TRUSTIFY_URL`) |
+| ACS Central (scan + FP sync) | `central.stackrox.svc:443` (`ROX_CENTRAL_ADDRESS`) |
+| Trustify (VEX) | `http://trustify-server.trustify.svc:8080` (`TRUSTIFY_URL`) |
+
+ACS build-time `image check` is **not** used for pass/fail.
+
+---
+
+## Pipeline helpers
+
+```bash
+./scripts/02-run-pipeline.sh \
+  --image quay.io/mronconi/trusted-quarkus-app:my-tag \
+  --revision main \
+  --rox-central central.stackrox.svc:443
+
+./scripts/02-run-pipeline.sh --help
+```
+
+---
+
+## GUAC (optional)
+
+After SBOM ingest: [http://localhost:3000](http://localhost:3000).
+
+```bash
+curl http://localhost:8085/query \
+  -H "Content-Type: application/json" \
+  -d '{"query":"{ packages(pkgSpec: {}) { type namespaces { namespace names { name versions { version } } } } }"}'
+```
+
+---
+
+## Product mapping
+
+| PoC component | Production equivalent |
+|---|---|
+| Kind | OpenShift (ROSA / ARO / self-managed) |
+| Tekton | OpenShift Pipelines |
+| Cosign static keys | Trusted Artifact Signer (keyless + Rekor) |
+| GUAC + Trustify | Trusted Profile Analyzer |
+| Conforma | Conforma / Enterprise Contract |
+| StackRox on Kind | ACS (visibility / runtime) |
+| Quay.io | Red Hat Quay |
 
 ---
 
@@ -293,12 +342,11 @@ Endpoints (defaults):
 ./scripts/04-cleanup.sh
 ```
 
-Deletes the Kind cluster, `.keys/`, and local port-forwards.
-
 ---
 
 ## References
 
+- [Conforma](https://conforma.dev/) · [`ec validate input`](https://conforma.dev/docs/cli/ec_validate_input.html)
 - [Sigstore](https://www.sigstore.dev/)
 - [GUAC](https://guac.sh/)
 - [Trustify](https://github.com/trustification/trustify) · [docs](https://docs.trustification.dev/)

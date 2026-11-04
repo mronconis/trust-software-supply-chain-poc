@@ -106,10 +106,12 @@ tkn pipeline start trusted-supply-chain \
   --workspace name=cosign-keys,secret=cosign-keys \
   --workspace name=dockerconfig,secret=quay-registry-secret \
   --workspace name=roxctl-secret,secret=stackrox-secret \
+  --workspace name=gate-scripts,config=gate-scripts \
+  --workspace name=conforma-policy,config=conforma-policy \
   --use-param-defaults \
   --showlog
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  Pipeline started! Watch the logs above.                    ║"
+echo "║  Pipeline started! Watch the logs above.                     ║"
 echo "╚══════════════════════════════════════════════════════════════╝"

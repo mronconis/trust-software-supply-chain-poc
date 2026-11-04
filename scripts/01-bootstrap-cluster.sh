@@ -290,7 +290,7 @@ fi
 echo ""
 echo "▸ [8/10] Installing Tekton Tasks and Pipeline"
 kubectl apply -n "${NAMESPACE}" -f "${ROOT_DIR}/tekton/tasks/"
-kubectl apply -n "${NAMESPACE}" -f "${ROOT_DIR}/tekton/pipelines/trusted-supply-chain.yaml"
+bash "${ROOT_DIR}/scripts/apply-conforma-gate.sh"
 
 # ── Step 9: Setup Credentials ─────────────────────────────────────
 echo ""

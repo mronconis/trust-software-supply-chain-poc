@@ -1,0 +1,8 @@
+---
+description: >
+  PoC CVE gate — CRITICAL findings from ACS must be waived via Trustify
+  CSAF VEX known_not_affected before the image may be signed.
+sources:
+  - name: cve-vex-gate
+    policy:
+      - ./policy

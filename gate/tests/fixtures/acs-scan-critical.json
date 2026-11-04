@@ -1,0 +1,35 @@
+{
+  "result": {
+    "summary": {
+      "CRITICAL": 2,
+      "IMPORTANT": 12,
+      "LOW": 86,
+      "MODERATE": 155,
+      "TOTAL-COMPONENTS": 55,
+      "TOTAL-VULNERABILITIES": 255
+    },
+    "vulnerabilities": [
+      {
+        "cveId": "CVE-2021-44228",
+        "cveSeverity": "CRITICAL",
+        "cveCVSS": 10,
+        "componentName": "log4j",
+        "componentVersion": "2.14.1"
+      },
+      {
+        "cveId": "CVE-2021-45046",
+        "cveSeverity": "CRITICAL",
+        "cveCVSS": 9,
+        "componentName": "log4j",
+        "componentVersion": "2.14.1"
+      },
+      {
+        "cveId": "CVE-2023-12345",
+        "cveSeverity": "IMPORTANT",
+        "cveCVSS": 7,
+        "componentName": "example",
+        "componentVersion": "1.0.0"
+      }
+    ]
+  }
+}

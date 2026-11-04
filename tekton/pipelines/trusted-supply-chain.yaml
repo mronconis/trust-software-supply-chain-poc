@@ -6,8 +6,8 @@ metadata:
     app.kubernetes.io/part-of: trust-software-supply-chain
 spec:
   description: >
-    Full trusted supply chain: git clone → build → push to Quay.io →
-    SBOM → GUAC/Trustify ingest → VEX-aware security gate → cosign sign & verify.
+    Full trusted supply chain: git clone → build → push → SBOM →
+    collect ACS+Trustify evidence → Conforma CVE gate → ACS FP sync → Cosign.
   params:
     - name: IMAGE
       type: string
@@ -24,21 +24,22 @@ spec:
     - name: ROX_CENTRAL_ADDRESS
       type: string
       default: "central.stackrox.svc:443"
-      description: "StackRox/ACS Central endpoint (host:port). Defaults to local StackRox on kind."
+      description: "StackRox/ACS Central endpoint (host:port)."
     - name: TRUSTIFY_URL
       type: string
       default: "http://trustify-server.trustify.svc:8080"
-      description: "Trustify API base URL for VEX not_affected CVE lookup."
+      description: "Trustify API base URL for VEX known_not_affected lookup."
   workspaces:
     - name: shared-workspace
     - name: cosign-keys
     - name: dockerconfig
     - name: roxctl-secret
+    - name: gate-scripts
+      description: "ConfigMap with gate/*.py collectors"
+    - name: conforma-policy
+      description: "ConfigMap with Conforma policy.yaml + Rego"
 
   tasks:
-    # ═══════════════════════════════════════════════════════════
-    # Stage 1 — Git clone + Build + Push to Quay.io
-    # ═══════════════════════════════════════════════════════════
     - name: build-and-push
       taskRef:
         name: build-and-push
@@ -57,9 +58,6 @@ spec:
         - name: dockerconfig
           workspace: dockerconfig
 
-    # ═══════════════════════════════════════════════════════════
-    # Stage 2 — Generate SBOM
-    # ═══════════════════════════════════════════════════════════
     - name: generate-sbom
       runAfter: [build-and-push]
       taskRef:
@@ -73,13 +71,10 @@ spec:
         - name: dockerconfig
           workspace: dockerconfig
 
-    # ═══════════════════════════════════════════════════════════
-    # Stage 3 — StackRox scan + VEX-aware policy gate (Trustify)
-    # ═══════════════════════════════════════════════════════════
-    - name: security-gate
+    - name: collect-security-evidence
       runAfter: [generate-sbom]
       taskRef:
-        name: security-gate
+        name: collect-security-evidence
       params:
         - name: IMAGE
           value: $(params.IMAGE)
@@ -94,12 +89,36 @@ spec:
           workspace: dockerconfig
         - name: roxctl-secret
           workspace: roxctl-secret
+        - name: gate-scripts
+          workspace: gate-scripts
 
-    # ═══════════════════════════════════════════════════════════
-    # Stage 4 — Attest SBOM + Sign + Verify (only if gate passed)
-    # ═══════════════════════════════════════════════════════════
+    - name: conforma-cve-gate
+      runAfter: [collect-security-evidence]
+      taskRef:
+        name: conforma-cve-gate
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+        - name: conforma-policy
+          workspace: conforma-policy
+
+    - name: sync-acs-false-positives
+      runAfter: [conforma-cve-gate]
+      taskRef:
+        name: sync-acs-false-positives
+      params:
+        - name: ROX_CENTRAL_ADDRESS
+          value: $(params.ROX_CENTRAL_ADDRESS)
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+        - name: roxctl-secret
+          workspace: roxctl-secret
+        - name: gate-scripts
+          workspace: gate-scripts
+
     - name: sign-and-attest
-      runAfter: [security-gate]
+      runAfter: [sync-acs-false-positives]
       taskRef:
         name: sign-and-attest
       params:
@@ -130,7 +149,7 @@ spec:
               ╠═══════════════════════════════════════════════════════════╣
               ║   Image : $(params.IMAGE)
               ║   Source: $(params.GIT_URL) @ $(params.GIT_REVISION)
-              ║   Gate  : StackRox/ACS + Trustify VEX (not_affected)
+              ║   Gate  : Conforma (ACS evidence + Trustify VEX)
               ║                                                         ║
               ║   If any task failed, the image was NOT signed.         ║
               ║   Run: cosign verify --key cosign.pub $(params.IMAGE)   ║

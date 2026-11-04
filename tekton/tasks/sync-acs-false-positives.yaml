@@ -1,0 +1,48 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: sync-acs-false-positives
+  labels:
+    app.kubernetes.io/part-of: trusted-software-supply-chain
+spec:
+  description: >
+    Non-blocking side effect: mirror VEX-waived CRITICAL CVEs from the
+    SecurityEvidence bundle into ACS as approved, image-tag-scoped
+    false-positive exceptions (Trustify remains source of truth).
+  params:
+    - name: ROX_CENTRAL_ADDRESS
+      type: string
+  workspaces:
+    - name: source
+    - name: roxctl-secret
+    - name: gate-scripts
+  results:
+    - name: ACS_FP_MARKED_COUNT
+      description: "CVEs marked/confirmed as ACS false positives"
+  steps:
+    - name: sync-fp
+      image: python:3.12-alpine
+      env:
+        - name: ROX_CENTRAL_ADDRESS
+          value: "$(params.ROX_CENTRAL_ADDRESS)"
+      script: |
+        #!/bin/sh
+        set -eu
+        SOURCE="$(workspaces.source.path)"
+        GATE="$(workspaces.gate-scripts.path)"
+
+        echo "╔═══════════════════════════════════════════════════════════╗"
+        echo "║  ACS FALSE-POSITIVE SYNC (from Trustify VEX)             ║"
+        echo "╚═══════════════════════════════════════════════════════════╝"
+
+        if [ ! -f "${SOURCE}/evidence.json" ]; then
+          echo "  ⚠ No evidence.json — nothing to sync"
+          printf "0" > "$(results.ACS_FP_MARKED_COUNT.path)"
+          exit 0
+        fi
+
+        python "${GATE}/sync_acs_fp.py" \
+          --evidence "${SOURCE}/evidence.json" \
+          --rox-central "${ROX_CENTRAL_ADDRESS}" \
+          --token-file "$(workspaces.roxctl-secret.path)/rox-api-token" \
+          --marked-out "$(results.ACS_FP_MARKED_COUNT.path)"

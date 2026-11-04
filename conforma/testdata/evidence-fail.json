@@ -1,0 +1,15 @@
+{
+  "apiVersion": "trust-supply-chain.poc/v1",
+  "kind": "SecurityEvidence",
+  "image": "quay.io/mronconi/trusted-quarkus-app:insecure",
+  "scan": {
+    "source": "acs",
+    "critical_cves": ["CVE-2021-44228", "CVE-2021-45046"],
+    "total_vulnerabilities": 255
+  },
+  "vex": {
+    "source": "trustify",
+    "advisories": [],
+    "known_not_affected": []
+  }
+}
