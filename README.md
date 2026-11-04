@@ -312,7 +312,7 @@ ACS build-time `image check` is **not** used for pass/fail.
 ## References
 
 - [Conforma](https://conforma.dev/) · [`ec validate input`](https://conforma.dev/docs/cli/ec_validate_input.html)
-- [Rego](https://www.openpolicyagent.org/docs/policy-language)
+- [OPA/Rego](https://www.openpolicyagent.org/docs/policy-language)
 - [Sigstore](https://www.sigstore.dev/)
 - [GUAC](https://guac.sh/)
 - [Trustify](https://github.com/trustification/trustify) · [docs](https://docs.trustification.dev/)
