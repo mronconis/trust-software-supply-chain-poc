@@ -52,7 +52,8 @@ An end-to-end Proof of Concept demonstrating a Trusted Software Supply Chain (TS
 
 ```
 ├── quarkus-app/                     # Sample Quarkus app (deliberately vulnerable log4j)
-├── gate/                            # Evidence collectors + ACS FP sync (Python, tested)
+├── gate/                            # Evidence collectors + ACS FP sync (Python)
+│   ├── README.md                    # Offline tests (pytest / OPA / Conforma)
 │   ├── collect_acs.py
 │   ├── collect_trustify.py
 │   ├── assemble_evidence.py
@@ -128,25 +129,7 @@ After editing `gate/*.py` or `conforma/policy*`, re-run bootstrap step 8 (or the
 
 ## Offline policy checks (no cluster)
 
-```bash
-# Collector unit tests
-python3 -m venv .venv && . .venv/bin/activate
-pip install -r gate/requirements-dev.txt
-pytest gate/tests -q
-
-# Rego unit tests
-docker run --rm -v "$PWD/conforma/policy:/policy:ro" openpolicyagent/opa:latest test /policy -v
-
-# Conforma against fixtures
-docker run --rm -v "$PWD/conforma:/conforma:ro" -w /conforma \
-  quay.io/conforma/cli:latest \
-  validate input testdata/evidence-pass.json --policy policy.yaml --info
-
-docker run --rm -v "$PWD/conforma:/conforma:ro" -w /conforma \
-  quay.io/conforma/cli:latest \
-  validate input testdata/evidence-fail.json --policy policy.yaml --info
-# → exit 1, policy.unwaived_critical for both Log4Shell CVEs
-```
+Collector unit tests, OPA Rego tests, and Conforma fixture validation: see [`gate/README.md`](gate/README.md).
 
 ---
 
@@ -329,6 +312,7 @@ ACS build-time `image check` is **not** used for pass/fail.
 ## References
 
 - [Conforma](https://conforma.dev/) · [`ec validate input`](https://conforma.dev/docs/cli/ec_validate_input.html)
+- [Rego](https://www.openpolicyagent.org/docs/policy-language)
 - [Sigstore](https://www.sigstore.dev/)
 - [GUAC](https://guac.sh/)
 - [Trustify](https://github.com/trustification/trustify) · [docs](https://docs.trustification.dev/)
