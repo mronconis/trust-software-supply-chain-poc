@@ -1,10 +1,14 @@
 # Trusted Software Supply Chain — Proof of Concept
 
-An end-to-end reference implementation of a Trusted Software Supply Chain (TSSC) pipeline leveraging the upstream projects powering the Red Hat Trusted Software Supply Chain stack. The workflow automates the build of a Quarkus container image, generates a standardized Software Bill of Materials (SBOM), and correlates vulnerability and exploitability telemetry across Red Hat Advanced Cluster Security (ACS) and Trustify. Cryptographic signing and attestation via Sigstore Cosign are enforced via an automated policy-as-code gate, proceeding only upon successful validation against Conforma CVE/VEX policies.
+An end-to-end Proof of Concept demonstrating a Trusted Software Supply Chain (TSSC) based on upstream Red Hat TSSC components. The pipeline automates Quarkus container builds, generates SBOMs, correlates vulnerability telemetry via ACS and Trustify, and enforces Conforma CVE/VEX policy gates before signing and attestation with Sigstore Cosign.
 
-> **Disclaimer:** This repository is strictly an experimental Proof of Concept (PoC) for architectural evaluation and technical demonstration. It is **not** intended, hardened, or supported for production environments or production reference deployments.
+> [!WARNING]
+> **PoC Only — Not for Production Use**  
+> This repository is designed exclusively for architectural evaluation and technical validation. It is not hardened, optimized, or supported for production deployments.
 
-> **Illustrative VEX:** The app still ships `log4j-core` 2.14.1 so ACS can surface CVE-2021-44228 / CVE-2021-45046. [`quarkus-app/Dockerfile`](quarkus-app/Dockerfile) applies a **demo mitigation** (strip `JndiLookup.class` + `-Dlog4j2.formatMsgNoLookups=true`). The SecOps CSAF VEX (`known_not_affected`) documents that mitigation for the Conforma gate only — **not** a production risk acceptance. Do not reuse this VEX or Dockerfile workaround; upgrade Log4j in real systems.
+> [!CAUTION]
+> **Illustrative VEX & Synthetic Vulnerability**  
+> The codebase intentionally includes `log4j-core 2.14.1` to trigger ACS alerts (`CVE-2021-44228` / `CVE-2021-45046`). The Dockerfile workaround (`JndiLookup.class` removal) and accompanying CSAF VEX (`known_not_affected`) exist solely to demonstrate Conforma gate evaluation. **Do not copy this mitigation pattern to production; always upgrade vulnerable dependencies.**
 
 ---
 
