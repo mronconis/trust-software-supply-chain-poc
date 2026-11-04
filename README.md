@@ -1,6 +1,6 @@
 # Trusted Software Supply Chain — Proof of Concept
 
-An end-to-end Proof of Concept demonstrating a Trusted Software Supply Chain (TSSC) based on upstream Red Hat TSSC components. The pipeline automates Quarkus container builds, generates SBOMs, correlates vulnerability telemetry via ACS and Trustify, and enforces Conforma CVE/VEX policy gates before signing and attestation with Sigstore Cosign.
+An end-to-end Proof of Concept demonstrating a Trusted Software Supply Chain (TSSC) based on upstream Red Hat TSSC components. The pipeline automates Quarkus container builds, generates SBOMs, correlates vulnerability telemetry via ACS and Trustify, and enforces a **policy-as-code** CVE/VEX gate with Conforma (Rego) before Sigstore Cosign signing and attestation.
 
 > [!WARNING]
 > **PoC Only — Not for Production Use**  
@@ -42,7 +42,7 @@ An end-to-end Proof of Concept demonstrating a Trusted Software Supply Chain (TS
 | Sigstore / Cosign | Trusted Artifact Signer (TAS) | Image signing |
 | GUAC | Trusted Profile Analyzer (TPA) | Dependency graph |
 | Trustify | Trusted Profile Analyzer (TPA) | SBOM store, advisories, **VEX Single Source of Truth (SSOT)** |
-| Conforma (`ec`) | Conforma / Enterprise Contract | **CVE gate policy engine** |
+| Conforma (`ec`) | Conforma / Enterprise Contract | **Policy-as-code** CVE/VEX gate (Rego) |
 | StackRox / roxctl | Advanced Cluster Security (ACS) | Informational scan + FP UI sync |
 | Syft + CycloneDX | — | SBOM generation |
 
@@ -281,6 +281,8 @@ cosign verify --key .keys/cosign.pub --insecure-ignore-tlog \
 
 ## Security gate design
 
+**Policy-as-code (Conforma):** release rules live in versioned Rego (`conforma/policy/`), evaluated with `ec validate input` against a stable `evidence.json` contract — not buried in Tekton shell. That keeps the gate **maintainable** (unit-testable Rego + fixtures) and **versatile** (new rules or inputs without rewriting pipeline glue).
+
 | Step | Tool | Blocking? |
 |---|---|---|
 | Collect ACS | `roxctl image scan` + `gate/collect_acs.py` | No — inventory only |
@@ -289,7 +291,7 @@ cosign verify --key .keys/cosign.pub --insecure-ignore-tlog \
 | Decide | Conforma `ec validate input` + Rego `policy.unwaived_critical` | **Yes** |
 | ACS sync | `gate/sync_acs_fp.py` | No — exact image tag, idempotent |
 
-**Authority model:** Trustify is the **Single Source of Truth (SSOT)** for VEX waivers. Conforma evaluates `CRITICAL ∖ known_not_affected` from that SSOT. ACS receives a one-way FP sync for UI consistency. An FP created only in ACS does **not** make the Tekton gate pass.
+**Authority model:** Trustify is the **Single Source of Truth (SSOT)** for VEX waivers. Conforma evaluates `CRITICAL ∖ known_not_affected` from that SSOT as policy-as-code. ACS receives a one-way FP sync for UI consistency. An FP created only in ACS does **not** make the Tekton gate pass.
 
 Defaults:
 
