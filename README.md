@@ -77,8 +77,7 @@ An end-to-end Proof of Concept demonstrating a Trusted Software Supply Chain (TS
 │   └── README.md
 ├── guac/  stackrox/  kind-config.yaml
 └── scripts/
-    ├── 01-bootstrap-cluster.sh
-    ├── apply-conforma-gate.sh       # ConfigMaps + gate Tasks/Pipeline
+    ├── 01-bootstrap-cluster.sh      # Cluster + Tasks/Pipeline + gate ConfigMaps
     ├── 02-run-pipeline.sh
     ├── 03-verify.sh
     └── 04-cleanup.sh
@@ -114,13 +113,9 @@ cd trust-software-supply-chain-poc
 ./scripts/01-bootstrap-cluster.sh
 ```
 
-Creates Kind cluster `tssc`, installs Tekton, GUAC, Trustify, and StackRox/ACS, applies Tasks/Pipeline (including Conforma gate ConfigMaps), generates Cosign keys under `.keys/`, creates secrets, and starts port-forwards.
+Creates Kind cluster `tssc`, installs Tekton, GUAC, Trustify, and StackRox/ACS, applies Tasks/Pipeline and the Conforma gate ConfigMaps (`gate-scripts`, `conforma-policy`), generates Cosign keys under `.keys/`, creates secrets, and starts port-forwards.
 
-Re-apply only the gate after local edits:
-
-```bash
-./scripts/apply-conforma-gate.sh
-```
+After editing `gate/*.py` or `conforma/policy*`, re-run bootstrap step 8 (or the full `./scripts/01-bootstrap-cluster.sh`) so those ConfigMaps are refreshed.
 
 | Service | URL | Notes |
 |---|---|---|

@@ -286,11 +286,27 @@ json.dump(p, sys.stdout)
   configure_policy_enforcement "Fixable Severity at least Important" '[]'
 fi
 
-# ── Step 8: Install Tekton Tasks and Pipeline ─────────────────────
+# ── Step 8: Install Tekton Tasks, Pipeline, Conforma gate ConfigMaps ─
 echo ""
 echo "▸ [8/10] Installing Tekton Tasks and Pipeline"
+
+# Gate collectors + Conforma Rego are mounted as ConfigMaps (not Task YAML).
+kubectl -n "${NAMESPACE}" create configmap gate-scripts \
+  --from-file="${ROOT_DIR}/gate/collect_acs.py" \
+  --from-file="${ROOT_DIR}/gate/collect_trustify.py" \
+  --from-file="${ROOT_DIR}/gate/assemble_evidence.py" \
+  --from-file="${ROOT_DIR}/gate/sync_acs_fp.py" \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+kubectl -n "${NAMESPACE}" create configmap conforma-policy \
+  --from-file=policy.yaml="${ROOT_DIR}/conforma/policy.yaml" \
+  --from-file=critical_vex.rego="${ROOT_DIR}/conforma/policy/critical_vex.rego" \
+  --dry-run=client -o yaml | kubectl apply -f -
+
 kubectl apply -n "${NAMESPACE}" -f "${ROOT_DIR}/tekton/tasks/"
-bash "${ROOT_DIR}/scripts/apply-conforma-gate.sh"
+kubectl apply -n "${NAMESPACE}" -f "${ROOT_DIR}/tekton/pipelines/trusted-supply-chain.yaml"
+kubectl -n "${NAMESPACE}" delete task security-gate --ignore-not-found
+echo "  ✅ Tasks, Pipeline, and Conforma gate ConfigMaps applied"
 
 # ── Step 9: Setup Credentials ─────────────────────────────────────
 echo ""
