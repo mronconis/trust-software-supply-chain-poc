@@ -12,6 +12,12 @@ RUN zip -q -d /build/target/quarkus-app/lib/main/org.apache.logging.log4j.log4j-
 
 # --- Stage 2: Runtime ---
 FROM registry.access.redhat.com/ubi9/openjdk-17-runtime:latest
+
+USER root
+RUN microdnf upgrade -y ca-certificates && \
+    microdnf clean all
+USER 185
+
 WORKDIR /deployments
 COPY --from=builder /build/target/quarkus-app/ ./
 

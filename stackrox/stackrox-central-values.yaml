@@ -1,10 +1,13 @@
 # StackRox Central Services — Helm values for Kind PoC
 #
-# Tuned for a local Kind cluster with limited resources (4 CPU / 16 GiB).
+# Tuned for a local Kind cluster with limited resources.
 # In production, deploy via the ACS operator on OpenShift.
 #
 # Chart: stackrox/stackrox-central-services
 # Repo:  https://raw.githubusercontent.com/stackrox/helm-charts/main/opensource/
+#
+# StackRox 5.0+ removed the legacy Scanner. Scanner V4 is required for
+# `roxctl image scan` / ACS vulnerability enrichment.
 # ─────────────────────────────────────────────────────────────────
 
 central:
@@ -46,27 +49,47 @@ central:
       persistentVolumeClaim:
         size: 5Gi
 
-# Legacy Scanner — 1 replica, minimal resources
+# Legacy Scanner — ignored on StackRox 5.0+ (kept for older charts / docs)
 scanner:
-  disable: false
-  replicas: 1
-  autoscaling:
-    disable: true
-  resources:
-    requests:
-      memory: "256Mi"
-      cpu: "100m"
-    limits:
-      memory: "2500Mi"
-      cpu: "2000m"
-  dbResources:
-    requests:
-      memory: "256Mi"
-      cpu: "100m"
-    limits:
-      memory: "2Gi"
-      cpu: "2000m"
-
-# Scanner V4 — disabled to save resources on kind
-scannerV4:
   disable: true
+
+# Scanner V4 — required for vulnerability scanning (replaces legacy Scanner)
+scannerV4:
+  disable: false
+  indexer:
+    replicas: 1
+    autoscaling:
+      disable: true
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "250m"
+      limits:
+        memory: "2Gi"
+        cpu: "1000m"
+  matcher:
+    replicas: 1
+    autoscaling:
+      disable: true
+    resources:
+      requests:
+        memory: "1Gi"
+        cpu: "250m"
+      limits:
+        memory: "3Gi"
+        cpu: "1000m"
+  db:
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "100m"
+      limits:
+        memory: "2Gi"
+        cpu: "1000m"
+    persistence:
+      persistentVolumeClaim:
+        claimName: scanner-v4-db
+        size: 10Gi
+        # Required on helm upgrade: chart defaults createClaim=false when
+        # Scanner V4 is enabled after the initial install (IsInstall=false).
+        createClaim: true

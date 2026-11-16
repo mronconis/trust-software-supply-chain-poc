@@ -47,8 +47,7 @@ curl -X POST "http://localhost:8084/api/v3/importer/redhat-csaf-quarkus" \
       "period": "1d",
       "onlyPatterns": [
         "quarkus",
-        "rhel-9",
-        "rhsa-2021"
+        "rhel-9"
       ]
     }
   }'
